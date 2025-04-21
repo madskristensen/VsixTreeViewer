@@ -9,7 +9,7 @@ namespace VsixTreeViewer
     internal sealed partial class Vsix
     {
         public const string Id = "VsixTreeViewer.8bc7b2af-9ddc-4b5d-9983-6a980b3d0243";
-        public const string Name = "VSIX Tree Viewer";
+        public const string Name = "VSIX Node";
         public const string Description = @"Shows the content of the compiled .vsix file directly in Solution Explorer";
         public const string Language = "en-US";
         public const string Version = "1.0";
