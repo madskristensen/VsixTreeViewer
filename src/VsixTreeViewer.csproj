@@ -77,7 +77,6 @@
       <IncludeInVSIX>true</IncludeInVSIX>
     </Content>
     <Content Include="Resources\Icon.png">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <IncludeInVSIX>true</IncludeInVSIX>
     </Content>
   </ItemGroup>
@@ -99,6 +98,9 @@
     <PackageReference Include="Community.VisualStudio.VSCT" Version="16.0.29.6" PrivateAssets="all" />
     <PackageReference Include="Community.VisualStudio.Toolkit.17" Version="17.0.533" ExcludeAssets="Runtime">
       <IncludeAssets>compile; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+    <PackageReference Include="Microsoft.VisualStudio.SDK" ExcludeAssets="runtime">
+      <Version>17.6.36389</Version>
     </PackageReference>
     <PackageReference Include="Microsoft.VSSDK.BuildTools" Version="17.13.2126">
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
