@@ -52,7 +52,6 @@
     <Compile Include="MEF\VsixItemSourceProvider.cs" />
     <Compile Include="MEF\VsixRootNode.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
-    <Compile Include="Commands\MyCommand.cs" />
     <Compile Include="Relationships.cs" />
     <Compile Include="VsixTreeViewerPackage.cs" />
     <Compile Include="source.extension.cs">
