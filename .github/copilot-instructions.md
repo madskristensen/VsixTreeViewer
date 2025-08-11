@@ -107,6 +107,78 @@ This is a Visual Studio extension project that provides a tree viewer for VSIX f
 - Cache results appropriately to avoid repeated file system access
 - Handle file locking issues when VSIX is being built
 
+## Code Examples and Patterns
+
+### MEF Component Pattern
+```csharp
+[Export(typeof(IAttachedCollectionSourceProvider))]
+[Name(nameof(YourProvider))]
+[Order(Before = HierarchyItemsProviderNames.Contains)]
+[AppliesToUIContext(PackageGuids.HasVsixProjectString)]
+internal class YourProvider : IAttachedCollectionSourceProvider
+{
+    // Implementation
+}
+```
+
+### Package Initialization Pattern
+```csharp
+public sealed class YourPackage : ToolkitPackage
+{
+    protected override async Task InitializeAsync(CancellationToken cancellationToken, IProgress<ServiceProgressData> progress)
+    {
+        await this.RegisterCommandsAsync();
+        // Additional initialization
+    }
+}
+```
+
+### Thread Safety Pattern
+```csharp
+public async Task SomeVSOperation()
+{
+    await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+    ThreadHelper.ThrowIfNotOnUIThread();
+    // VS service calls here
+}
+```
+
+### Error Handling Pattern
+```csharp
+try
+{
+    // VS extension operations
+}
+catch (Exception ex)
+{
+    // Log error appropriately
+    await VS.MessageBox.ShowErrorAsync("Operation failed", ex.Message);
+}
+```
+
+## Project-Specific Considerations
+
+### VSIX File Structure
+- VSIX files are ZIP archives with specific manifest structure
+- Main manifest is `extension.vsixmanifest` in the root
+- Content is organized by type (assemblies, assets, etc.)
+- This extension reads and displays this structure in Solution Explorer
+
+### UI Context and Loading
+- Extension loads only when a VSIX project is present (`HasVsixProject` context)
+- Uses `SolutionHasProjectFlavor` with `EXTENSIBILITY` project type
+- Avoids unnecessary loading to maintain VS performance
+
+### File System Monitoring
+- Monitor VSIX file changes during development/build
+- Use debouncing to avoid excessive updates during rapid changes
+- Handle cases where VSIX file is locked during build process
+
+### Icon and Display Management
+- Map file extensions to appropriate VS icons using `IconMapper`
+- Handle unknown file types gracefully
+- Maintain consistency with VS Solution Explorer theming
+
 ## Debugging and Troubleshooting
 - Enable diagnostic logging in VS experimental instance
 - Use VS debugger attached to experimental instance
