@@ -38,13 +38,13 @@ namespace VsixTreeViewer.MEF
         private readonly object _loadLock = new();
         private CancellationTokenSource _loadCancellationTokenSource;
 
-        public VsixItemNode(IAttachedCollectionSource source, string outputPath, string vsixPath)
+        public VsixItemNode(IAttachedCollectionSource source, string outputPath, string vsixPath, string tooltipContent = null)
         {
             SourceItem = source;
-            Rebuild(outputPath, vsixPath);
+            Rebuild(outputPath, vsixPath, tooltipContent);
         }
 
-        public void Rebuild(string outputPath, string vsixPath)
+        public void Rebuild(string outputPath, string vsixPath, string tooltipContent = null)
         {
             string newText = !string.IsNullOrEmpty(vsixPath) && File.Exists(vsixPath)
                 ? Path.GetFileName(vsixPath)
@@ -109,10 +109,10 @@ namespace VsixTreeViewer.MEF
                 RaisePropertyChanged(nameof(HasItems));
             }
 
-            if (!string.IsNullOrEmpty(vsixPath))
+            if (!string.IsNullOrEmpty(vsixPath) || tooltipContent != null)
             {
                 object oldTooltip = ToolTipContent;
-                ToolTipContent = SetTooltip(vsixPath);
+                ToolTipContent = tooltipContent ?? SetTooltip(vsixPath);
 
                 if (!Equals(oldTooltip, ToolTipContent))
                 {

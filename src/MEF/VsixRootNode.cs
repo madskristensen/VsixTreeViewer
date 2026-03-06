@@ -1,9 +1,11 @@
 using System.Collections;
+using System.Collections.Generic;
 using System.ComponentModel;
 using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using EnvDTE;
 using Microsoft.Internal.VisualStudio.PlatformUI;
@@ -20,7 +22,10 @@ namespace VsixTreeViewer
         private readonly string _projectDirectory;
         private readonly DTE _dte;
         private readonly string _defaultName;
+        private readonly object _watcherLock = new();
         private EnvDTE.Project _project;
+        private FileSystemWatcher _vsixWatcher;
+        private string _watchedDirectory;
 
         public VsixRootNode(IVsHierarchyItem hierarchyItem)
         {
@@ -42,8 +47,13 @@ namespace VsixTreeViewer
         {
             if (Success && IsMatchingProject(Project))
             {
-                Debouncer.Debounce(_projectPath, () => Rebuild(true), 500);
+                ScheduleRebuild(force: true);
             }
+        }
+
+        private void ScheduleRebuild(bool force)
+        {
+            Debouncer.Debounce(_projectPath, () => Rebuild(force), 500);
         }
 
         private bool IsMatchingProject(string projectFromEvent)
@@ -88,24 +98,31 @@ namespace VsixTreeViewer
                 try
                 {
                     await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
-                    var vsixPath = GetVsixPath();
+                    string outputDirectory = GetOutputDirectory();
+                    string vsixPath = GetVsixPath(outputDirectory);
+                    UpdateVsixWatcher(outputDirectory);
 
                     await TaskScheduler.Default;
 
                     if (!string.IsNullOrEmpty(vsixPath))
                     {
-                        var unpackedPath = UnpackVsix(vsixPath, force);
+                        string unpackedPath = UnpackVsix(vsixPath, force);
+                        string tooltip = BuildTooltip(vsixPath, unpackedPath);
 
                         if (!string.IsNullOrEmpty(unpackedPath))
                         {
                             await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
-                            _item.Rebuild(unpackedPath, vsixPath);
+                            _item.Rebuild(unpackedPath, vsixPath, tooltip);
                             return;
                         }
+
+                        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+                        _item.Rebuild(_defaultName, "root", tooltip);
+                        return;
                     }
 
                     await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
-                    _item.Rebuild(_defaultName, "root");
+                    _item.Rebuild(_defaultName, "root", BuildMissingVsixTooltip(outputDirectory));
                 }
                 catch (Exception ex)
                 {
@@ -115,7 +132,7 @@ namespace VsixTreeViewer
             }, VsTaskRunContext.UIThreadIdlePriority).FireAndForget();
         }
 
-        private string GetVsixPath()
+        private string GetOutputDirectory()
         {
             ThreadHelper.ThrowIfNotOnUIThread();
 
@@ -125,10 +142,152 @@ namespace VsixTreeViewer
                 return null;
             }
 
-            string binDir = Path.Combine(_projectDirectory, outputPath);
-            return Directory.Exists(binDir)
-                ? Directory.GetFiles(binDir, "*.vsix", SearchOption.TopDirectoryOnly).FirstOrDefault()
-                : null;
+            return Path.GetFullPath(Path.Combine(_projectDirectory, outputPath));
+        }
+
+        private string GetVsixPath(string outputDirectory)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+
+            if (string.IsNullOrWhiteSpace(outputDirectory) || !Directory.Exists(outputDirectory))
+            {
+                return null;
+            }
+
+            string[] candidates = Directory.GetFiles(outputDirectory, "*.vsix", SearchOption.TopDirectoryOnly);
+            if (candidates.Length == 0)
+            {
+                return null;
+            }
+
+            HashSet<string> preferredNames = GetPreferredVsixFileNames();
+
+            return candidates
+                .OrderByDescending(path => preferredNames.Contains(Path.GetFileName(path)))
+                .ThenByDescending(path => File.GetLastWriteTimeUtc(path))
+                .ThenBy(path => Path.GetFileName(path), StringComparer.OrdinalIgnoreCase)
+                .FirstOrDefault();
+        }
+
+        private HashSet<string> GetPreferredVsixFileNames()
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+
+            var preferredNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                _defaultName,
+                Path.GetFileNameWithoutExtension(_projectPath) + ".vsix"
+            };
+
+            EnvDTE.Project project = _project ?? FindProjectRecursive(_dte.Solution.Projects);
+
+            AddVsixFileName(preferredNames, GetProjectPropertyValue(project, "TargetFileName"));
+            AddVsixFileName(preferredNames, GetProjectPropertyValue(project, "TargetName"));
+            AddVsixFileName(preferredNames, GetProjectPropertyValue(project, "OutputFileName"));
+            AddVsixFileName(preferredNames, GetProjectPropertyValue(project, "AssemblyName"));
+
+            return preferredNames;
+        }
+
+        private static void AddVsixFileName(ISet<string> fileNames, string value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                return;
+            }
+
+            string fileName = value.EndsWith(".vsix", StringComparison.OrdinalIgnoreCase)
+                ? value
+                : value + ".vsix";
+
+            fileNames.Add(fileName);
+        }
+
+        private string GetProjectPropertyValue(EnvDTE.Project project, string propertyName)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+
+            try
+            {
+                return project?.Properties?.Item(propertyName)?.Value?.ToString();
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private void UpdateVsixWatcher(string outputDirectory)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+
+            string normalizedOutputDirectory = NormalizePath(outputDirectory);
+            bool watcherMatches = !string.IsNullOrEmpty(normalizedOutputDirectory)
+                && string.Equals(_watchedDirectory, normalizedOutputDirectory, StringComparison.OrdinalIgnoreCase);
+
+            if (watcherMatches)
+            {
+                return;
+            }
+
+            DisposeWatcher();
+
+            if (string.IsNullOrWhiteSpace(outputDirectory) || !Directory.Exists(outputDirectory))
+            {
+                return;
+            }
+
+            var watcher = new FileSystemWatcher(outputDirectory, "*.vsix")
+            {
+                IncludeSubdirectories = false,
+                NotifyFilter = NotifyFilters.FileName | NotifyFilters.Size | NotifyFilters.LastWrite | NotifyFilters.CreationTime
+            };
+
+            watcher.Changed += VsixWatcher_Changed;
+            watcher.Created += VsixWatcher_Changed;
+            watcher.Deleted += VsixWatcher_Changed;
+            watcher.Renamed += VsixWatcher_Renamed;
+            watcher.EnableRaisingEvents = true;
+
+            lock (_watcherLock)
+            {
+                _vsixWatcher = watcher;
+                _watchedDirectory = normalizedOutputDirectory;
+            }
+        }
+
+        private void VsixWatcher_Changed(object sender, FileSystemEventArgs e)
+        {
+            ScheduleRebuild(force: false);
+        }
+
+        private void VsixWatcher_Renamed(object sender, RenamedEventArgs e)
+        {
+            ScheduleRebuild(force: false);
+        }
+
+        private void DisposeWatcher()
+        {
+            FileSystemWatcher watcherToDispose;
+
+            lock (_watcherLock)
+            {
+                watcherToDispose = _vsixWatcher;
+                _vsixWatcher = null;
+                _watchedDirectory = null;
+            }
+
+            if (watcherToDispose == null)
+            {
+                return;
+            }
+
+            watcherToDispose.EnableRaisingEvents = false;
+            watcherToDispose.Changed -= VsixWatcher_Changed;
+            watcherToDispose.Created -= VsixWatcher_Changed;
+            watcherToDispose.Deleted -= VsixWatcher_Changed;
+            watcherToDispose.Renamed -= VsixWatcher_Renamed;
+            watcherToDispose.Dispose();
         }
 
         private string GetOutputPathFromProject()
@@ -312,6 +471,171 @@ namespace VsixTreeViewer
             File.WriteAllText(GetStampPath(extractionPath), currentStamp);
         }
 
+        private static string BuildMissingVsixTooltip(string outputDirectory)
+        {
+            if (string.IsNullOrWhiteSpace(outputDirectory))
+            {
+                return "Build the project to browse its generated VSIX package.";
+            }
+
+            return $"Build the project to browse its generated VSIX package.\r\nExpected output folder: {outputDirectory}";
+        }
+
+        private static string BuildTooltip(string vsixPath, string extractedPath)
+        {
+            if (string.IsNullOrWhiteSpace(vsixPath) || !File.Exists(vsixPath))
+            {
+                return BuildMissingVsixTooltip(outputDirectory: null);
+            }
+
+            FileInfo fileInfo = new(vsixPath);
+            var tooltip = new StringBuilder();
+
+            AppendTooltipLine(tooltip, "VSIX file", fileInfo.Name);
+            AppendTooltipLine(tooltip, "Size", fileInfo.Length.ToString("N0") + " bytes");
+            AppendTooltipLine(tooltip, "Last updated", fileInfo.LastWriteTime.ToString());
+
+            AddManifestMetadata(tooltip, extractedPath);
+
+            return tooltip.ToString().TrimEnd();
+        }
+
+        private static void AddManifestMetadata(StringBuilder tooltip, string extractedPath)
+        {
+            string manifestPath = GetManifestPath(extractedPath);
+            if (string.IsNullOrWhiteSpace(manifestPath))
+            {
+                return;
+            }
+
+            try
+            {
+                string manifestContent = File.ReadAllText(manifestPath);
+
+                AppendTooltipLine(tooltip, "Display name", GetManifestElementValue(manifestContent, "DisplayName"));
+                AppendTooltipLine(tooltip, "ID", GetManifestAttributeValue(manifestContent, "Identity", "Id"));
+                AppendTooltipLine(tooltip, "Version", GetManifestAttributeValue(manifestContent, "Identity", "Version"));
+                AppendTooltipLine(tooltip, "Publisher", GetManifestAttributeValue(manifestContent, "Identity", "Publisher"));
+
+                List<string> installationTargets = GetInstallationTargets(manifestContent);
+                if (installationTargets.Count > 0)
+                {
+                    AppendTooltipLine(tooltip, "Targets", string.Join(", ", installationTargets));
+                }
+
+                int assetCount = CountManifestElements(manifestContent, "Asset");
+                if (assetCount > 0)
+                {
+                    AppendTooltipLine(tooltip, "Assets", assetCount.ToString());
+                }
+            }
+            catch (Exception ex)
+            {
+                ex.Log();
+            }
+        }
+
+        private static string GetManifestPath(string extractedPath)
+        {
+            if (string.IsNullOrWhiteSpace(extractedPath) || !Directory.Exists(extractedPath))
+            {
+                return null;
+            }
+
+            return Directory.GetFiles(extractedPath, "*.vsixmanifest", SearchOption.TopDirectoryOnly).FirstOrDefault();
+        }
+
+        private static string GetManifestElementValue(string manifestContent, string elementName)
+        {
+            Match match = Regex.Match(
+                manifestContent,
+                $@"<(?:(?:\w+):)?{Regex.Escape(elementName)}\b[^>]*>(?<value>.*?)</(?:(?:\w+):)?{Regex.Escape(elementName)}>",
+                RegexOptions.IgnoreCase | RegexOptions.Singleline);
+
+            return match.Success ? CleanManifestValue(match.Groups["value"].Value) : null;
+        }
+
+        private static string GetManifestAttributeValue(string manifestContent, string elementName, string attributeName)
+        {
+            Match match = Regex.Match(
+                manifestContent,
+                $@"<(?:(?:\w+):)?{Regex.Escape(elementName)}\b[^>]*\b{Regex.Escape(attributeName)}\s*=\s*""(?<value>[^""]*)""[^>]*/?>",
+                RegexOptions.IgnoreCase | RegexOptions.Singleline);
+
+            return match.Success ? CleanManifestValue(match.Groups["value"].Value) : null;
+        }
+
+        private static List<string> GetInstallationTargets(string manifestContent)
+        {
+            MatchCollection matches = Regex.Matches(
+                manifestContent,
+                @"<(?:(?:\w+):)?InstallationTarget\b(?<attributes>[^>]*)>(?<content>.*?)</(?:(?:\w+):)?InstallationTarget>",
+                RegexOptions.IgnoreCase | RegexOptions.Singleline);
+
+            var targets = new List<string>();
+
+            foreach (Match match in matches)
+            {
+                string attributes = match.Groups["attributes"].Value;
+                string content = match.Groups["content"].Value;
+                string targetId = GetAttributeValue(attributes, "Id");
+                string version = GetAttributeValue(attributes, "Version");
+                string architecture = GetManifestElementValue(content, "ProductArchitecture");
+
+                string target = string.Join(" ", new[] { targetId, version, architecture }.Where(part => !string.IsNullOrWhiteSpace(part)));
+                if (!string.IsNullOrWhiteSpace(target))
+                {
+                    targets.Add(target);
+                }
+            }
+
+            return targets;
+        }
+
+        private static string GetAttributeValue(string attributes, string attributeName)
+        {
+            Match match = Regex.Match(
+                attributes ?? string.Empty,
+                $@"\b{Regex.Escape(attributeName)}\s*=\s*""(?<value>[^""]*)""",
+                RegexOptions.IgnoreCase | RegexOptions.Singleline);
+
+            return match.Success ? CleanManifestValue(match.Groups["value"].Value) : null;
+        }
+
+        private static int CountManifestElements(string manifestContent, string elementName)
+        {
+            return Regex.Matches(
+                manifestContent,
+                $@"<(?:(?:\w+):)?{Regex.Escape(elementName)}\b",
+                RegexOptions.IgnoreCase | RegexOptions.Singleline).Count;
+        }
+
+        private static string CleanManifestValue(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                return null;
+            }
+
+            return value
+                .Replace("\r", string.Empty)
+                .Replace("\n", " ")
+                .Replace("\t", " ")
+                .Trim();
+        }
+
+        private static void AppendTooltipLine(StringBuilder tooltip, string label, string value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                return;
+            }
+
+            tooltip.Append(label);
+            tooltip.Append(": ");
+            tooltip.AppendLine(value.Trim());
+        }
+
         public void RaisePropertyChanged(string propertyName)
         {
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
@@ -322,6 +646,7 @@ namespace VsixTreeViewer
         public void Dispose()
         {
             _dte.Events.BuildEvents.OnBuildProjConfigDone -= BuildEvents_OnBuildProjConfigDone;
+            DisposeWatcher();
             _item?.Dispose();
         }
     }
