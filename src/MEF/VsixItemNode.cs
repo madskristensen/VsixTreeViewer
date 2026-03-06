@@ -42,47 +42,72 @@ namespace VsixTreeViewer.MEF
 
         public void Rebuild(string outputPath, string vsixPath)
         {
-            Text = Path.GetFileName(outputPath) ?? ".vsix content";
-            IsCut = false;
-            _isLoaded = false;
-            var hadItems = HasItems;
+            string newText = Path.GetFileName(outputPath) ?? ".vsix content";
+            bool newIsCut = false;
+            FileSystemInfo newInfo;
+            bool newHasItems;
+
+            lock (_loadLock)
+            {
+                _isLoaded = false;
+            }
 
             if (Directory.Exists(outputPath))
             {
-                Info = new DirectoryInfo(outputPath);
-                HasItems = CheckHasItemsQuick();
+                newInfo = new DirectoryInfo(outputPath);
+                newHasItems = CheckHasItemsQuick(newInfo as DirectoryInfo);
             }
             else if (File.Exists(outputPath))
             {
-                Info = new FileInfo(outputPath);
-                HasItems = false;
+                newInfo = new FileInfo(outputPath);
+                newHasItems = false;
             }
             else
             {
-                IsCut = true;
-                HasItems = false;
+                newInfo = null;
+                newIsCut = true;
+                newHasItems = false;
             }
 
-            // Batch property change notifications
-            RaisePropertyChanged(nameof(Text));
-            RaisePropertyChanged(nameof(IsCut));
+            string oldText = Text;
+            bool oldIsCut = IsCut;
+            bool oldHasItems = HasItems;
 
-            // Only notify HasItems changed if it actually changed
-            if (hadItems != HasItems)
+            Info = newInfo;
+            Text = newText;
+            IsCut = newIsCut;
+            HasItems = newHasItems;
+
+            if (!string.Equals(oldText, Text, StringComparison.Ordinal))
+            {
+                RaisePropertyChanged(nameof(Text));
+            }
+
+            if (oldIsCut != IsCut)
+            {
+                RaisePropertyChanged(nameof(IsCut));
+            }
+
+            if (oldHasItems != HasItems)
             {
                 RaisePropertyChanged(nameof(HasItems));
             }
 
             if (!string.IsNullOrEmpty(vsixPath))
             {
+                object oldTooltip = ToolTipContent;
                 ToolTipContent = SetTooltip(vsixPath);
-                RaisePropertyChanged(nameof(ToolTipContent));
+
+                if (!Equals(oldTooltip, ToolTipContent))
+                {
+                    RaisePropertyChanged(nameof(ToolTipContent));
+                }
             }
         }
 
-        private bool CheckHasItemsQuick()
+        private bool CheckHasItemsQuick(DirectoryInfo directory)
         {
-            if (Info is DirectoryInfo directory)
+            if (directory != null)
             {
                 try
                 {
@@ -119,6 +144,8 @@ namespace VsixTreeViewer.MEF
 
         private async Task LoadChildrenAsync()
         {
+            CancellationToken cancellationToken;
+
             lock (_loadLock)
             {
                 if (_isLoading || _isLoaded || IsDisposed)
@@ -129,9 +156,8 @@ namespace VsixTreeViewer.MEF
                 _isLoading = true;
                 _loadCancellationTokenSource?.Cancel();
                 _loadCancellationTokenSource = new CancellationTokenSource();
+                cancellationToken = _loadCancellationTokenSource.Token;
             }
-
-            CancellationToken cancellationToken = _loadCancellationTokenSource.Token;
 
             try
             {
@@ -216,16 +242,32 @@ namespace VsixTreeViewer.MEF
         {
             ThreadHelper.ThrowIfNotOnUIThread();
 
-            // Dispose old children
-            if (_children != null)
+            _children ??= [];
+
+            if (AreChildrenEquivalent(_children, newChildren))
             {
-                foreach (VsixItemNode child in _children)
+                foreach (VsixItemNode item in newChildren)
                 {
-                    child.Dispose();
+                    item.Dispose();
                 }
+
+                _isLoaded = true;
+
+                bool hadItems = HasItems;
+                HasItems = _children.Any();
+                if (hadItems != HasItems)
+                {
+                    RaisePropertyChanged(nameof(HasItems));
+                }
+
+                return;
             }
 
-            _children ??= [];
+            // Dispose old children
+            foreach (VsixItemNode child in _children)
+            {
+                child.Dispose();
+            }
 
             _children.BeginBulkOperation();
             _children.Clear();
@@ -237,6 +279,27 @@ namespace VsixTreeViewer.MEF
 
             RaisePropertyChanged(nameof(Items));
             RaisePropertyChanged(nameof(HasItems));
+        }
+
+        private static bool AreChildrenEquivalent(IList<VsixItemNode> existingChildren, IList<VsixItemNode> newChildren)
+        {
+            if (existingChildren.Count != newChildren.Count)
+            {
+                return false;
+            }
+
+            for (int i = 0; i < existingChildren.Count; i++)
+            {
+                string existingPath = existingChildren[i].Info?.FullName;
+                string newPath = newChildren[i].Info?.FullName;
+
+                if (!string.Equals(existingPath, newPath, StringComparison.OrdinalIgnoreCase))
+                {
+                    return false;
+                }
+            }
+
+            return true;
         }
 
         public string Text { get; set; }
@@ -305,7 +368,20 @@ namespace VsixTreeViewer.MEF
 
         public int CompareTo(object obj)
         {
-            return obj is ITreeDisplayItem item ? _stringComparer.Compare(Text, item.Text) : 0;
+            if (obj is not VsixItemNode node)
+            {
+                return obj is ITreeDisplayItem item ? _stringComparer.Compare(Text, item.Text) : 0;
+            }
+
+            var thisIsDirectory = Info is DirectoryInfo;
+            var otherIsDirectory = node.Info is DirectoryInfo;
+
+            if (thisIsDirectory != otherIsDirectory)
+            {
+                return thisIsDirectory ? -1 : 1;
+            }
+
+            return _stringComparer.Compare(Text, node.Text);
         }
 
         private string SetTooltip(string vsixFile)

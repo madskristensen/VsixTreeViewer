@@ -1,7 +1,6 @@
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Windows.Forms;
 using Microsoft.Internal.VisualStudio.PlatformUI;
 
 namespace VsixTreeViewer.MEF
@@ -33,7 +32,7 @@ namespace VsixTreeViewer.MEF
                 }
                 else
                 {
-                    SendKeys.Send("{RIGHT}");
+                    item.RefreshAsync().FireAndForget();
                 }
             }
 
