@@ -7,6 +7,7 @@ using System.Linq;
 using System.Threading;
 using System.Windows;
 using Microsoft.Internal.VisualStudio.PlatformUI;
+using Microsoft.VisualStudio.Imaging;
 using Microsoft.VisualStudio.Imaging.Interop;
 using Microsoft.VisualStudio.Language.Intellisense;
 
@@ -31,6 +32,9 @@ namespace VsixTreeViewer.MEF
         private BulkObservableCollection<VsixItemNode> _children;
         private bool _isLoaded;
         private bool _isLoading;
+        private bool _reloadRequested;
+        private int _loadGeneration;
+        private bool _showVsixIcon;
         private readonly object _loadLock = new();
         private CancellationTokenSource _loadCancellationTokenSource;
 
@@ -42,7 +46,9 @@ namespace VsixTreeViewer.MEF
 
         public void Rebuild(string outputPath, string vsixPath)
         {
-            string newText = Path.GetFileName(outputPath) ?? ".vsix content";
+            string newText = !string.IsNullOrEmpty(vsixPath) && File.Exists(vsixPath)
+                ? Path.GetFileName(vsixPath)
+                : Path.GetFileName(outputPath) ?? ".vsix content";
             bool newIsCut = false;
             FileSystemInfo newInfo;
             bool newHasItems;
@@ -50,6 +56,13 @@ namespace VsixTreeViewer.MEF
             lock (_loadLock)
             {
                 _isLoaded = false;
+                _loadGeneration++;
+
+                if (_isLoading)
+                {
+                    _reloadRequested = true;
+                    _loadCancellationTokenSource?.Cancel();
+                }
             }
 
             if (Directory.Exists(outputPath))
@@ -77,6 +90,9 @@ namespace VsixTreeViewer.MEF
             Text = newText;
             IsCut = newIsCut;
             HasItems = newHasItems;
+            _showVsixIcon = !string.IsNullOrEmpty(vsixPath) &&
+                !string.Equals(vsixPath, "root", StringComparison.OrdinalIgnoreCase) &&
+                vsixPath.EndsWith(".vsix", StringComparison.OrdinalIgnoreCase);
 
             if (!string.Equals(oldText, Text, StringComparison.Ordinal))
             {
@@ -145,6 +161,8 @@ namespace VsixTreeViewer.MEF
         private async Task LoadChildrenAsync()
         {
             CancellationToken cancellationToken;
+            int loadGeneration;
+            bool restartLoad = false;
 
             lock (_loadLock)
             {
@@ -154,6 +172,7 @@ namespace VsixTreeViewer.MEF
                 }
 
                 _isLoading = true;
+                loadGeneration = _loadGeneration;
                 _loadCancellationTokenSource?.Cancel();
                 _loadCancellationTokenSource = new CancellationTokenSource();
                 cancellationToken = _loadCancellationTokenSource.Token;
@@ -164,16 +183,18 @@ namespace VsixTreeViewer.MEF
                 // Do the heavy work off the UI thread
                 List<VsixItemNode> childNodes = await Task.Run(() => LoadChildrenOffUIThread(cancellationToken), cancellationToken);
 
-                if (cancellationToken.IsCancellationRequested || IsDisposed)
+                if (cancellationToken.IsCancellationRequested || IsDisposed || !IsCurrentLoad(loadGeneration))
                 {
+                    DisposeChildren(newChildren: childNodes);
                     return;
                 }
 
                 // Switch back to UI thread to update the collection
                 await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
 
-                if (cancellationToken.IsCancellationRequested || IsDisposed)
+                if (cancellationToken.IsCancellationRequested || IsDisposed || !IsCurrentLoad(loadGeneration))
                 {
+                    DisposeChildren(newChildren: childNodes);
                     return;
                 }
 
@@ -193,7 +214,34 @@ namespace VsixTreeViewer.MEF
                 lock (_loadLock)
                 {
                     _isLoading = false;
+
+                    if (_reloadRequested && !IsDisposed)
+                    {
+                        _reloadRequested = false;
+                        restartLoad = true;
+                    }
                 }
+
+                if (restartLoad)
+                {
+                    _ = LoadChildrenAsync();
+                }
+            }
+        }
+
+        private bool IsCurrentLoad(int loadGeneration)
+        {
+            lock (_loadLock)
+            {
+                return loadGeneration == _loadGeneration;
+            }
+        }
+
+        private static void DisposeChildren(IEnumerable<VsixItemNode> newChildren)
+        {
+            foreach (VsixItemNode child in newChildren)
+            {
+                child.Dispose();
             }
         }
 
@@ -208,6 +256,11 @@ namespace VsixTreeViewer.MEF
                     foreach (FileSystemInfo item in directory.EnumerateFileSystemInfos())
                     {
                         cancellationToken.ThrowIfCancellationRequested();
+
+                        if (IsInternalMetadataFile(item))
+                        {
+                            continue;
+                        }
 
                         var child = new VsixItemNode(this, item.FullName, null);
                         activeNodes.Add(child);
@@ -236,6 +289,11 @@ namespace VsixTreeViewer.MEF
             }
 
             return activeNodes;
+        }
+
+        private static bool IsInternalMetadataFile(FileSystemInfo item)
+        {
+            return item is FileInfo && string.Equals(item.Name, ".vsixstamp", StringComparison.OrdinalIgnoreCase);
         }
 
         private void UpdateChildrenOnUIThread(List<VsixItemNode> newChildren)
@@ -310,8 +368,8 @@ namespace VsixTreeViewer.MEF
         public FontWeight FontWeight => FontWeights.Normal;
         public System.Windows.FontStyle FontStyle => FontStyles.Normal;
 
-        public ImageMoniker IconMoniker => Info.GetIcon(false);
-        public ImageMoniker ExpandedIconMoniker => Info.GetIcon(true);
+        public ImageMoniker IconMoniker => _showVsixIcon ? KnownMonikers.Extension : Info.GetIcon(false);
+        public ImageMoniker ExpandedIconMoniker => _showVsixIcon ? KnownMonikers.Extension : Info.GetIcon(true);
         public ImageMoniker OverlayIconMoniker => default;
         public ImageMoniker StateIconMoniker => default;
 
@@ -341,6 +399,13 @@ namespace VsixTreeViewer.MEF
             lock (_loadLock)
             {
                 _isLoaded = false;
+                _loadGeneration++;
+
+                if (_isLoading)
+                {
+                    _reloadRequested = true;
+                }
+
                 _loadCancellationTokenSource?.Cancel();
             }
 
@@ -354,6 +419,13 @@ namespace VsixTreeViewer.MEF
             lock (_loadLock)
             {
                 _isLoaded = false;
+                _loadGeneration++;
+
+                if (_isLoading)
+                {
+                    _reloadRequested = true;
+                }
+
                 _loadCancellationTokenSource?.Cancel();
             }
 
@@ -363,6 +435,11 @@ namespace VsixTreeViewer.MEF
 
         public void CancelLoad()
         {
+            lock (_loadLock)
+            {
+                _loadGeneration++;
+            }
+
             _loadCancellationTokenSource?.Cancel();
         }
 

@@ -2,6 +2,8 @@ using System.Collections;
 using System.ComponentModel;
 using System.IO;
 using System.Linq;
+using System.Security.Cryptography;
+using System.Text;
 using System.Threading.Tasks;
 using EnvDTE;
 using Microsoft.Internal.VisualStudio.PlatformUI;
@@ -15,6 +17,7 @@ namespace VsixTreeViewer
         private readonly VsixItemNode _item;
         private readonly IEnumerable _items;
         private readonly string _projectPath;
+        private readonly string _projectDirectory;
         private readonly DTE _dte;
         private readonly string _defaultName;
         private EnvDTE.Project _project;
@@ -28,6 +31,7 @@ namespace VsixTreeViewer
             _items = new[] { _item };
             _dte = project.DTE;
             _projectPath = project.FullName;
+            _projectDirectory = Path.GetDirectoryName(_projectPath);
             _project = project;
 
             Rebuild(false);
@@ -81,25 +85,32 @@ namespace VsixTreeViewer
         {
             ThreadHelper.JoinableTaskFactory.StartOnIdle(async () =>
             {
-                await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
-                var vsixPath = GetVsixPath();
-
-                await TaskScheduler.Default;
-
-                if (!string.IsNullOrEmpty(vsixPath))
+                try
                 {
-                    var unpackedPath = UnpackVsix(vsixPath, force);
+                    await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+                    var vsixPath = GetVsixPath();
 
-                    if (!string.IsNullOrEmpty(unpackedPath))
+                    await TaskScheduler.Default;
+
+                    if (!string.IsNullOrEmpty(vsixPath))
                     {
-                        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
-                        _item.Rebuild(unpackedPath, vsixPath);
-                        return;
-                    }
-                }
+                        var unpackedPath = UnpackVsix(vsixPath, force);
 
-                await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
-                _item.Rebuild(_defaultName, "root");
+                        if (!string.IsNullOrEmpty(unpackedPath))
+                        {
+                            await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+                            _item.Rebuild(unpackedPath, vsixPath);
+                            return;
+                        }
+                    }
+
+                    await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+                    _item.Rebuild(_defaultName, "root");
+                }
+                catch (Exception ex)
+                {
+                    ex.Log();
+                }
 
             }, VsTaskRunContext.UIThreadIdlePriority).FireAndForget();
         }
@@ -108,23 +119,39 @@ namespace VsixTreeViewer
         {
             ThreadHelper.ThrowIfNotOnUIThread();
 
-            EnvDTE.Project project = _project;
-
-            if (project == null || !string.Equals(project.FullName, _projectPath, StringComparison.OrdinalIgnoreCase))
+            string outputPath = GetOutputPathFromProject();
+            if (string.IsNullOrWhiteSpace(outputPath) || string.IsNullOrWhiteSpace(_projectDirectory))
             {
-                project = FindProjectRecursive(_dte.Solution.Projects);
-                _project = project;
+                return null;
             }
 
-            if (project != null)
+            string binDir = Path.Combine(_projectDirectory, outputPath);
+            return Directory.Exists(binDir)
+                ? Directory.GetFiles(binDir, "*.vsix", SearchOption.TopDirectoryOnly).FirstOrDefault()
+                : null;
+        }
+
+        private string GetOutputPathFromProject()
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+
+            try
             {
-                var outputPath = project.ConfigurationManager.ActiveConfiguration.Properties.Item("OutputPath").Value.ToString();
-                var binDir = Path.Combine(Path.GetDirectoryName(project.FullName), outputPath);
+                EnvDTE.Project project = _project;
 
-                return Directory.Exists(binDir) ? Directory.GetFiles(binDir, "*.vsix", SearchOption.TopDirectoryOnly).FirstOrDefault() : null;
+                if (project == null || !string.Equals(project.FullName, _projectPath, StringComparison.OrdinalIgnoreCase))
+                {
+                    project = FindProjectRecursive(_dte.Solution.Projects);
+                    _project = project;
+                }
+
+                return project?.ConfigurationManager?.ActiveConfiguration?.Properties?.Item("OutputPath")?.Value?.ToString();
             }
-
-            return null;
+            catch (Exception ex)
+            {
+                ex.Log();
+                return null;
+            }
         }
 
         /// <summary>
@@ -195,11 +222,12 @@ namespace VsixTreeViewer
                 return null;
             }
 
-            var path = Path.Combine(Path.GetTempPath(), Vsix.Name, Path.GetFileName(vsixPath));
+            string path = GetExtractionPath(vsixPath);
+            string currentStamp = GetVsixStamp(vsixPath);
 
             if (Directory.Exists(path))
             {
-                if (!force && Directory.GetLastWriteTime(path) > File.GetLastWriteTime(vsixPath))
+                if (!force && IsExtractionCurrent(path, currentStamp))
                 {
                     return path;
                 }
@@ -223,6 +251,7 @@ namespace VsixTreeViewer
             try
             {
                 System.IO.Compression.ZipFile.ExtractToDirectory(vsixPath, path);
+                WriteExtractionStamp(path, currentStamp);
                 return path;
             }
             catch (IOException ex)
@@ -230,6 +259,57 @@ namespace VsixTreeViewer
                 ex.Log();
                 return null;
             }
+            catch (UnauthorizedAccessException ex)
+            {
+                ex.Log();
+                return null;
+            }
+        }
+
+        private static string GetExtractionPath(string vsixPath)
+        {
+            return Path.Combine(Path.GetTempPath(), Vsix.Name, GetPathKey(vsixPath));
+        }
+
+        private static string GetPathKey(string path)
+        {
+            byte[] pathBytes = Encoding.UTF8.GetBytes(path);
+            byte[] hashBytes;
+
+            using (SHA256 sha256 = SHA256.Create())
+            {
+                hashBytes = sha256.ComputeHash(pathBytes);
+            }
+
+            var builder = new StringBuilder(16);
+            for (int i = 0; i < 8; i++)
+            {
+                builder.Append(hashBytes[i].ToString("x2"));
+            }
+
+            return builder.ToString();
+        }
+
+        private static string GetStampPath(string extractionPath)
+        {
+            return Path.Combine(extractionPath, ".vsixstamp");
+        }
+
+        private static string GetVsixStamp(string vsixPath)
+        {
+            FileInfo fileInfo = new(vsixPath);
+            return $"{fileInfo.Length}:{fileInfo.LastWriteTimeUtc.Ticks}";
+        }
+
+        private static bool IsExtractionCurrent(string extractionPath, string currentStamp)
+        {
+            string stampPath = GetStampPath(extractionPath);
+            return File.Exists(stampPath) && string.Equals(File.ReadAllText(stampPath), currentStamp, StringComparison.Ordinal);
+        }
+
+        private static void WriteExtractionStamp(string extractionPath, string currentStamp)
+        {
+            File.WriteAllText(GetStampPath(extractionPath), currentStamp);
         }
 
         public void RaisePropertyChanged(string propertyName)

@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading.Tasks;
 using Microsoft.Internal.VisualStudio.PlatformUI;
 
 namespace VsixTreeViewer.MEF
@@ -21,22 +22,40 @@ namespace VsixTreeViewer.MEF
             {
                 if (item.Info is FileInfo)
                 {
-                    if (preview)
-                    {
-                        VS.Documents.OpenInPreviewTabAsync(item.Info.FullName).FireAndForget();
-                    }
-                    else
-                    {
-                        VS.Documents.OpenAsync(item.Info.FullName).FireAndForget();
-                    }
+                    ObserveTask(OpenItemAsync(item.Info.FullName, preview));
                 }
                 else
                 {
-                    item.RefreshAsync().FireAndForget();
+                    ObserveTask(item.RefreshAsync());
                 }
             }
 
             return true;
+        }
+
+        private static async Task OpenItemAsync(string filePath, bool preview)
+        {
+            if (preview)
+            {
+                await VS.Documents.OpenInPreviewTabAsync(filePath);
+                return;
+            }
+
+            await VS.Documents.OpenAsync(filePath);
+        }
+
+        private static void ObserveTask(Task task)
+        {
+            task.ContinueWith(t =>
+            {
+                if (t.Exception?.InnerException != null)
+                {
+                    t.Exception.InnerException.Log();
+                    return;
+                }
+
+                t.Exception?.Log();
+            }, TaskContinuationOptions.OnlyOnFaulted);
         }
     }
 }

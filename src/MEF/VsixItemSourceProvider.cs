@@ -12,9 +12,10 @@ namespace VsixTreeViewer.MEF
     [Name(nameof(VsixItemSourceProvider))]
     [Order(Before = HierarchyItemsProviderNames.Contains)]
     [AppliesToUIContext(PackageGuids.HasVsixProjectString)]
-    internal class VsixItemSourceProvider : IAttachedCollectionSourceProvider
+    internal class VsixItemSourceProvider : IAttachedCollectionSourceProvider, IDisposable
     {
         private readonly Dictionary<string, VsixRootNode> _rootNodes = new();
+        private bool _isDisposed;
 
         public VsixItemSourceProvider()
         {
@@ -99,6 +100,14 @@ namespace VsixTreeViewer.MEF
 
             try
             {
+                IVsHierarchy hierarchy = hierarchyItem.GetHierarchy();
+
+                if (hierarchy.TryGetItemProperty(VSConstants.VSITEMID_ROOT, (int)__VSHPROPID.VSHPROPID_SaveName, out string projectPath)
+                    && !string.IsNullOrWhiteSpace(projectPath))
+                {
+                    return projectPath;
+                }
+
                 EnvDTE.Project project = HierarchyUtilities.GetProject(hierarchyItem);
                 return project?.FullName;
             }
@@ -107,6 +116,18 @@ namespace VsixTreeViewer.MEF
                 ex.Log();
                 return null;
             }
+        }
+
+        public void Dispose()
+        {
+            if (_isDisposed)
+            {
+                return;
+            }
+
+            _isDisposed = true;
+            VS.Events.SolutionEvents.OnBeforeCloseSolution -= OnBeforeCloseSolution;
+            OnBeforeCloseSolution();
         }
     }
 }
