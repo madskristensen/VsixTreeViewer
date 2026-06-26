@@ -158,6 +158,14 @@ namespace VsixTreeViewer
             string[] candidates = Directory.GetFiles(outputDirectory, "*.vsix", SearchOption.TopDirectoryOnly);
             if (candidates.Length == 0)
             {
+                // SDK-style projects (e.g. VsixType v3) may only emit the .vsix into a
+                // target-framework subfolder (bin\Debug\net48), while DTE reports the
+                // OutputPath as bin\Debug. Fall back to a recursive search in that case.
+                candidates = Directory.GetFiles(outputDirectory, "*.vsix", SearchOption.AllDirectories);
+            }
+
+            if (candidates.Length == 0)
+            {
                 return null;
             }
 
@@ -240,7 +248,9 @@ namespace VsixTreeViewer
 
             var watcher = new FileSystemWatcher(outputDirectory, "*.vsix")
             {
-                IncludeSubdirectories = false,
+                // Include subdirectories so the .vsix is detected even when it is only
+                // emitted into a target-framework subfolder (e.g. bin\Debug\net48).
+                IncludeSubdirectories = true,
                 NotifyFilter = NotifyFilters.FileName | NotifyFilters.Size | NotifyFilters.LastWrite | NotifyFilters.CreationTime
             };
 
