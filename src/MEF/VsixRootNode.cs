@@ -442,21 +442,80 @@ namespace VsixTreeViewer
                 }
             }
 
+            // The file watcher can fire while MSBuild is still writing the .vsix, so the
+            // file may be locked by another process. Wait for the lock to be released
+            // before attempting to extract it.
+            WaitForFileReady(vsixPath);
+
+            const int maxAttempts = 10;
+            for (int attempt = 1; ; attempt++)
+            {
+                try
+                {
+                    System.IO.Compression.ZipFile.ExtractToDirectory(vsixPath, path);
+                    WriteExtractionStamp(path, currentStamp);
+                    return path;
+                }
+                catch (IOException ex)
+                {
+                    if (attempt >= maxAttempts)
+                    {
+                        ex.Log();
+                        return null;
+                    }
+
+                    // The .vsix (or a partially extracted file) is still locked. Clean up any
+                    // partial extraction and retry after a short delay.
+                    TryDeleteDirectory(path);
+                    System.Threading.Thread.Sleep(250);
+                }
+                catch (UnauthorizedAccessException ex)
+                {
+                    ex.Log();
+                    return null;
+                }
+            }
+        }
+
+        private static void WaitForFileReady(string filePath)
+        {
+            const int maxAttempts = 20;
+
+            for (int attempt = 1; attempt <= maxAttempts; attempt++)
+            {
+                try
+                {
+                    using (FileStream stream = File.Open(filePath, FileMode.Open, FileAccess.Read, FileShare.Read))
+                    {
+                        return;
+                    }
+                }
+                catch (IOException)
+                {
+                    if (attempt >= maxAttempts)
+                    {
+                        return;
+                    }
+
+                    System.Threading.Thread.Sleep(250);
+                }
+            }
+        }
+
+        private static void TryDeleteDirectory(string path)
+        {
             try
             {
-                System.IO.Compression.ZipFile.ExtractToDirectory(vsixPath, path);
-                WriteExtractionStamp(path, currentStamp);
-                return path;
+                if (Directory.Exists(path))
+                {
+                    Directory.Delete(path, true);
+                }
             }
-            catch (IOException ex)
+            catch (IOException)
             {
-                ex.Log();
-                return null;
             }
-            catch (UnauthorizedAccessException ex)
+            catch (UnauthorizedAccessException)
             {
-                ex.Log();
-                return null;
             }
         }
 
