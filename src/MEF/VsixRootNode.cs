@@ -149,7 +149,7 @@ namespace VsixTreeViewer
                     {
                         string snapshotPath = CreateVsixSnapshot(vsixPath);
                         VsixArchive archive = !string.IsNullOrWhiteSpace(snapshotPath)
-                            ? VsixArchive.Load(snapshotPath)
+                            ? VsixArchive.Load(snapshotPath, vsixPath)
                             : null;
 
                         if (archive == null)
@@ -710,6 +710,7 @@ namespace VsixTreeViewer
             AppendTooltipLine(tooltip, "VSIX file", fileInfo.Name);
             AppendTooltipLine(tooltip, "Size", fileInfo.Length.ToString("N0") + " bytes");
             AppendTooltipLine(tooltip, "Last updated", fileInfo.LastWriteTime.ToString());
+            AppendTooltipLine(tooltip, "Opened entries", "Read-only temporary copies");
 
             AddManifestMetadata(tooltip, manifestContent);
             AddComparisonMetadata(tooltip, comparison);

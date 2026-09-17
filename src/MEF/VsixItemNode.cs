@@ -636,10 +636,10 @@ namespace VsixTreeViewer.MEF
         {
             if (entry.IsDirectory)
             {
-                return $"{entry.Children.Count:N0} item(s)\r\nPackage path: {entry.FullName}";
+                return $"{entry.Children.Count:N0} item(s)\r\nPackage: {Path.GetFileName(entry.Owner.OriginalPath)}\r\nPackage path: {entry.FullName}";
             }
 
-            return $"Size: {entry.Length:N0} bytes\r\nPackage path: {entry.FullName}";
+            return $"Size: {entry.Length:N0} bytes\r\nPackage: {Path.GetFileName(entry.Owner.OriginalPath)}\r\nPackage path: {entry.FullName}\r\nOpens as a read-only temporary copy.";
         }
 
         private static VsixItemNode CreateComparisonNode(IAttachedCollectionSource source, VsixArchiveComparison comparison)

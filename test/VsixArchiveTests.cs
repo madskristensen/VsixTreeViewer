@@ -44,8 +44,10 @@ public sealed class VsixArchiveTests
             string materializedRoot = Directory.GetParent(Path.GetDirectoryName(materializedPath))!.FullName;
 
             Assert.AreEqual("alpha", File.ReadAllText(materializedPath));
+            Assert.IsTrue(new FileInfo(materializedPath).IsReadOnly);
             Assert.IsFalse(File.Exists(Path.Combine(materializedRoot, "b.txt")));
 
+            File.SetAttributes(materializedPath, FileAttributes.Normal);
             Directory.Delete(materializedRoot, recursive: true);
         }
         finally
@@ -80,6 +82,7 @@ public sealed class VsixArchiveTests
             Assert.IsNotNull(manifest);
             Assert.AreEqual("extension.vsixmanifest", manifest.FullName);
             Assert.AreEqual("content", File.ReadAllText(Path.Combine(extractionPath, "folder", "content.txt")));
+            Assert.IsFalse(new FileInfo(Path.Combine(extractionPath, "folder", "content.txt")).IsReadOnly);
         }
         finally
         {

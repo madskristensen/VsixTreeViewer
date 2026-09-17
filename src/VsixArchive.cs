@@ -10,15 +10,17 @@ namespace VsixTreeViewer
 {
     internal sealed class VsixArchive
     {
-        private VsixArchive(string snapshotPath, VsixArchiveEntry root, string manifestContent)
+        private VsixArchive(string snapshotPath, string originalPath, VsixArchiveEntry root, string manifestContent)
         {
             SnapshotPath = snapshotPath;
+            OriginalPath = originalPath;
             Root = root;
             Root.SetOwner(this);
             ManifestContent = manifestContent;
         }
 
         public string SnapshotPath { get; }
+        public string OriginalPath { get; }
         public VsixArchiveEntry Root { get; }
         public string ManifestContent { get; }
 
@@ -27,7 +29,7 @@ namespace VsixTreeViewer
             return FindEntry(Root, entry => !entry.IsDirectory && entry.Name.EndsWith(".vsixmanifest", StringComparison.OrdinalIgnoreCase));
         }
 
-        public static VsixArchive Load(string snapshotPath)
+        public static VsixArchive Load(string snapshotPath, string originalPath = null)
         {
             var root = new MutableEntry(string.Empty, string.Empty, isDirectory: true, length: 0, DateTimeOffset.MinValue);
             string manifestContent = null;
@@ -62,7 +64,7 @@ namespace VsixTreeViewer
                 }
             }
 
-            return new VsixArchive(snapshotPath, root.Freeze(owner: null), manifestContent);
+            return new VsixArchive(snapshotPath, originalPath ?? snapshotPath, root.Freeze(owner: null), manifestContent);
         }
 
         public string Materialize(VsixArchiveEntry entry)
@@ -83,10 +85,12 @@ namespace VsixTreeViewer
 
             if (File.Exists(targetPath) && new FileInfo(targetPath).Length == entry.Length)
             {
+                SetReadOnly(targetPath, isReadOnly: true);
                 return targetPath;
             }
 
             Directory.CreateDirectory(Path.GetDirectoryName(targetPath));
+            SetReadOnly(targetPath, isReadOnly: false);
 
             using ZipArchive archive = ZipFile.OpenRead(SnapshotPath);
             ZipArchiveEntry zipEntry = archive.GetEntry(entry.FullName)
@@ -98,6 +102,7 @@ namespace VsixTreeViewer
             }
 
             zipEntry.ExtractToFile(targetPath, overwrite: true);
+            SetReadOnly(targetPath, isReadOnly: true);
             VsixTemporaryFiles.TouchMaterializedRoot(rootDirectory);
             return targetPath;
         }
@@ -117,7 +122,22 @@ namespace VsixTreeViewer
 
                 Directory.CreateDirectory(Path.GetDirectoryName(targetPath));
                 File.Copy(sourcePath, targetPath, overwrite: true);
+                SetReadOnly(targetPath, isReadOnly: false);
             }
+        }
+
+        private static void SetReadOnly(string path, bool isReadOnly)
+        {
+            if (!File.Exists(path))
+            {
+                return;
+            }
+
+            FileAttributes attributes = File.GetAttributes(path);
+            attributes = isReadOnly
+                ? attributes | FileAttributes.ReadOnly
+                : attributes & ~FileAttributes.ReadOnly;
+            File.SetAttributes(path, attributes);
         }
 
         private static VsixArchiveEntry FindEntry(VsixArchiveEntry parent, Func<VsixArchiveEntry, bool> predicate)

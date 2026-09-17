@@ -155,6 +155,11 @@ namespace VsixTreeViewer
             {
                 if (Directory.Exists(path))
                 {
+                    foreach (string file in Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories))
+                    {
+                        File.SetAttributes(file, FileAttributes.Normal);
+                    }
+
                     Directory.Delete(path, recursive: true);
                 }
             }
