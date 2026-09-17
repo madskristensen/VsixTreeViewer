@@ -185,17 +185,32 @@ namespace VsixTreeViewer
         {
             ThreadHelper.ThrowIfNotOnUIThread();
 
+            string targetVsixContainer = GetTargetVsixContainerPath();
+            if (!string.IsNullOrWhiteSpace(targetVsixContainer) && File.Exists(targetVsixContainer))
+            {
+                return targetVsixContainer;
+            }
+
             if (string.IsNullOrWhiteSpace(outputDirectory) || !Directory.Exists(outputDirectory))
             {
                 return null;
             }
 
-            string[] candidates = Directory.GetFiles(outputDirectory, "*.vsix", SearchOption.TopDirectoryOnly);
+            var candidateDirectories = new List<string> { outputDirectory };
+            string targetFramework = GetEvaluatedProjectPropertyValue("TargetFramework");
+            if (!string.IsNullOrWhiteSpace(targetFramework))
+            {
+                candidateDirectories.Add(Path.Combine(outputDirectory, targetFramework));
+            }
+
+            string[] candidates = candidateDirectories
+                .Where(Directory.Exists)
+                .SelectMany(path => Directory.GetFiles(path, "*.vsix", SearchOption.TopDirectoryOnly))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+
             if (candidates.Length == 0)
             {
-                // SDK-style projects (e.g. VsixType v3) may only emit the .vsix into a
-                // target-framework subfolder (bin\Debug\net48), while DTE reports the
-                // OutputPath as bin\Debug. Fall back to a recursive search in that case.
                 candidates = Directory.GetFiles(outputDirectory, "*.vsix", SearchOption.AllDirectories);
             }
 
@@ -213,6 +228,28 @@ namespace VsixTreeViewer
                 .FirstOrDefault();
         }
 
+        private string GetTargetVsixContainerPath()
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+
+            string targetVsixContainer = GetEvaluatedProjectPropertyValue("TargetVsixContainer");
+            if (!string.IsNullOrWhiteSpace(targetVsixContainer))
+            {
+                return Path.IsPathRooted(targetVsixContainer)
+                    ? Path.GetFullPath(targetVsixContainer)
+                    : Path.GetFullPath(Path.Combine(_projectDirectory, targetVsixContainer));
+            }
+
+            string targetVsixContainerName = GetEvaluatedProjectPropertyValue("TargetVsixContainerName");
+            string outputPath = GetOutputPathFromProject();
+            if (string.IsNullOrWhiteSpace(targetVsixContainerName) || string.IsNullOrWhiteSpace(outputPath))
+            {
+                return null;
+            }
+
+            return Path.GetFullPath(Path.Combine(_projectDirectory, outputPath, targetVsixContainerName));
+        }
+
         private HashSet<string> GetPreferredVsixFileNames()
         {
             ThreadHelper.ThrowIfNotOnUIThread();
@@ -225,7 +262,7 @@ namespace VsixTreeViewer
 
             EnvDTE.Project project = _project ?? FindProjectRecursive(_dte.Solution.Projects);
 
-            AddVsixFileName(preferredNames, GetProjectPropertyValue(project, "TargetFileName"));
+            AddVsixFileName(preferredNames, GetProjectPropertyValue(project, "TargetVsixContainerName"));
             AddVsixFileName(preferredNames, GetProjectPropertyValue(project, "TargetName"));
             AddVsixFileName(preferredNames, GetProjectPropertyValue(project, "OutputFileName"));
             AddVsixFileName(preferredNames, GetProjectPropertyValue(project, "AssemblyName"));
@@ -259,6 +296,27 @@ namespace VsixTreeViewer
             {
                 return null;
             }
+        }
+
+        private string GetEvaluatedProjectPropertyValue(string propertyName)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+
+            EnvDTE.Project project = _project ?? FindProjectRecursive(_dte.Solution.Projects);
+
+            try
+            {
+                string value = project?.ConfigurationManager?.ActiveConfiguration?.Properties?.Item(propertyName)?.Value?.ToString();
+                if (!string.IsNullOrWhiteSpace(value))
+                {
+                    return value;
+                }
+            }
+            catch
+            {
+            }
+
+            return GetProjectPropertyValue(project, propertyName);
         }
 
         private void UpdateVsixWatcher(string outputDirectory)
@@ -366,7 +424,10 @@ namespace VsixTreeViewer
                     _project = project;
                 }
 
-                return project?.ConfigurationManager?.ActiveConfiguration?.Properties?.Item("OutputPath")?.Value?.ToString();
+                string outDir = GetEvaluatedProjectPropertyValue("OutDir");
+                return !string.IsNullOrWhiteSpace(outDir)
+                    ? outDir
+                    : GetEvaluatedProjectPropertyValue("OutputPath");
             }
             catch (Exception ex)
             {
