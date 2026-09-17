@@ -61,6 +61,8 @@ namespace VsixTreeViewer.MEF
 
         public IEnumerable<IAttachedRelationship> GetRelationships(object item)
         {
+            ThreadHelper.ThrowIfNotOnUIThread();
+
             if (item is IVsHierarchyItem hierarchyItem && IsVsixProject(hierarchyItem))
             {
                 yield return Relationships.Contains;

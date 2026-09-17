@@ -1,6 +1,6 @@
-﻿[marketplace]: https://marketplace.visualstudio.com/items?itemName=MadsKristensen.VsixTreeViewer
-[vsixgallery]: https://vsixgallery.com/extension/VsixTreeViewer.8bc7b2af-9ddc-4b5d-9983-6a980b3d0243/
-[repo]: https://github.com/madskristensen/VsixTreeViewer
+﻿[marketplace]: <https://marketplace.visualstudio.com/items?itemName=MadsKristensen.VsixTreeViewer>
+[vsixgallery]: <https://vsixgallery.com/extension/VsixTreeViewer.8bc7b2af-9ddc-4b5d-9983-6a980b3d0243/>
+[repo]: <https://github.com/madskristensen/VsixTreeViewer>
 
 # VSIX Tree Viewer for Visual Studio
 

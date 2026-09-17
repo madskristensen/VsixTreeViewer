@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Internal.VisualStudio.PlatformUI;
 using Microsoft.VisualStudio.Threading;
@@ -58,7 +59,7 @@ namespace VsixTreeViewer.MEF
 
         private static void ObserveTask(Task task)
         {
-            task.ContinueWith(t =>
+            _ = task.ContinueWith(t =>
             {
                 if (t.Exception?.InnerException != null)
                 {
@@ -67,7 +68,7 @@ namespace VsixTreeViewer.MEF
                 }
 
                 t.Exception?.Log();
-            }, TaskContinuationOptions.OnlyOnFaulted);
+            }, CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted, TaskScheduler.Default);
         }
     }
 }

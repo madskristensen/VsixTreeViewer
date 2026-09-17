@@ -446,8 +446,23 @@ namespace VsixTreeViewer.MEF
         public FontWeight FontWeight => FontWeights.Normal;
         public System.Windows.FontStyle FontStyle => FontStyles.Normal;
 
-        public ImageMoniker IconMoniker => GetIcon(isOpen: false);
-        public ImageMoniker ExpandedIconMoniker => GetIcon(isOpen: true);
+        public ImageMoniker IconMoniker
+        {
+            get
+            {
+                ThreadHelper.ThrowIfNotOnUIThread();
+                return GetIcon(isOpen: false);
+            }
+        }
+
+        public ImageMoniker ExpandedIconMoniker
+        {
+            get
+            {
+                ThreadHelper.ThrowIfNotOnUIThread();
+                return GetIcon(isOpen: true);
+            }
+        }
         public ImageMoniker OverlayIconMoniker => default;
         public ImageMoniker StateIconMoniker => default;
 
@@ -572,6 +587,8 @@ namespace VsixTreeViewer.MEF
 
         private ImageMoniker GetIcon(bool isOpen)
         {
+            ThreadHelper.ThrowIfNotOnUIThread();
+
             if (_showErrorIcon)
             {
                 return KnownMonikers.StatusError;

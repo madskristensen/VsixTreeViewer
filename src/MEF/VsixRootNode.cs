@@ -51,6 +51,8 @@ namespace VsixTreeViewer
 
         private void BuildEvents_OnBuildProjConfigBegin(string Project, string ProjectConfig, string Platform, string SolutionConfig)
         {
+            ThreadHelper.ThrowIfNotOnUIThread();
+
             if (IsMatchingProject(Project))
             {
                 _isBuilding = true;
@@ -60,6 +62,8 @@ namespace VsixTreeViewer
 
         private void BuildEvents_OnBuildProjConfigDone(string Project, string ProjectConfig, string Platform, string SolutionConfig, bool Success)
         {
+            ThreadHelper.ThrowIfNotOnUIThread();
+
             if (!IsMatchingProject(Project))
             {
                 return;
@@ -79,12 +83,18 @@ namespace VsixTreeViewer
 
         private void ScheduleRebuild(bool force)
         {
+            ThreadHelper.ThrowIfNotOnUIThread();
+
             if (_isDisposed || _isBuilding)
             {
                 return;
             }
 
-            Debouncer.Debounce(_projectPath, () => Rebuild(force), 500);
+            Debouncer.Debounce(_projectPath, () => ThreadHelper.JoinableTaskFactory.Run(async () =>
+            {
+                await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+                Rebuild(force);
+            }), 500);
         }
 
         private bool IsMatchingProject(string projectFromEvent)
@@ -121,6 +131,8 @@ namespace VsixTreeViewer
 
         private void Rebuild(bool force)
         {
+            ThreadHelper.ThrowIfNotOnUIThread();
+
             if (_isDisposed)
             {
                 return;
@@ -395,12 +407,20 @@ namespace VsixTreeViewer
 
         private void VsixWatcher_Changed(object sender, FileSystemEventArgs e)
         {
-            ScheduleRebuild(force: false);
+            ThreadHelper.JoinableTaskFactory.Run(async () =>
+            {
+                await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+                ScheduleRebuild(force: false);
+            });
         }
 
         private void VsixWatcher_Renamed(object sender, RenamedEventArgs e)
         {
-            ScheduleRebuild(force: false);
+            ThreadHelper.JoinableTaskFactory.Run(async () =>
+            {
+                await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+                ScheduleRebuild(force: false);
+            });
         }
 
         private void DisposeWatcher()
@@ -541,6 +561,7 @@ namespace VsixTreeViewer
 
         internal void Refresh()
         {
+            ThreadHelper.ThrowIfNotOnUIThread();
             ScheduleRebuild(force: true);
         }
 
@@ -607,7 +628,7 @@ namespace VsixTreeViewer
                         }
                     }
                 }
-                catch (IOException ex)
+                catch (IOException)
                 {
                     if (File.Exists(snapshotPath))
                     {
@@ -821,10 +842,15 @@ namespace VsixTreeViewer
             _isDisposed = true;
             Debouncer.Cancel(_projectPath);
             SetActiveSnapshot(snapshotPath: null);
-            _dte.Events.BuildEvents.OnBuildProjConfigBegin -= BuildEvents_OnBuildProjConfigBegin;
-            _dte.Events.BuildEvents.OnBuildProjConfigDone -= BuildEvents_OnBuildProjConfigDone;
             DisposeWatcher();
             _item?.Dispose();
+
+            ThreadHelper.JoinableTaskFactory.Run(async () =>
+            {
+                await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+                _dte.Events.BuildEvents.OnBuildProjConfigBegin -= BuildEvents_OnBuildProjConfigBegin;
+                _dte.Events.BuildEvents.OnBuildProjConfigDone -= BuildEvents_OnBuildProjConfigDone;
+            });
         }
     }
 }

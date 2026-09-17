@@ -147,10 +147,10 @@ namespace VsixTreeViewer.Commands
     [Command(PackageIds.RefreshVsix)]
     internal sealed class RefreshVsixCommand : BaseCommand<RefreshVsixCommand>
     {
-        protected override Task ExecuteAsync(OleMenuCmdEventArgs e)
+        protected override async Task ExecuteAsync(OleMenuCmdEventArgs e)
         {
+            await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
             VsixCommandHelpers.CurrentItem?.RootNode?.Refresh();
-            return Task.CompletedTask;
         }
     }
 }
