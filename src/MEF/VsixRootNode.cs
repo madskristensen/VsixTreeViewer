@@ -89,20 +89,17 @@ namespace VsixTreeViewer
 
         private bool IsMatchingProject(string projectFromEvent)
         {
-            if (string.IsNullOrWhiteSpace(projectFromEvent))
+            string projectUniqueName = null;
+
+            try
             {
-                return false;
+                projectUniqueName = _project?.UniqueName;
+            }
+            catch (COMException)
+            {
             }
 
-            string trackedProject = NormalizePath(_projectPath);
-            string eventProject = NormalizePath(projectFromEvent);
-
-            if (!string.IsNullOrEmpty(trackedProject) && !string.IsNullOrEmpty(eventProject))
-            {
-                return string.Equals(trackedProject, eventProject, StringComparison.OrdinalIgnoreCase);
-            }
-
-            return string.Equals(Path.GetFileName(_projectPath), Path.GetFileName(projectFromEvent), StringComparison.OrdinalIgnoreCase);
+            return ProjectBuildMatcher.IsMatch(_projectPath, projectUniqueName, projectFromEvent);
         }
 
         private static string NormalizePath(string path)

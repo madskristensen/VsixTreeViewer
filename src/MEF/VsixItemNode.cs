@@ -85,6 +85,8 @@ namespace VsixTreeViewer.MEF
             ToolTipContent = tooltipContent;
 
             RaiseChangedProperties(oldText, oldIsCut, oldHasItems);
+            RaisePropertyChanged(nameof(ToolTipContent));
+            _ = LoadChildrenAsync();
         }
 
         public void RebuildError(string displayName, string message)
@@ -231,7 +233,7 @@ namespace VsixTreeViewer.MEF
 
                 _children ??= [];
 
-                if (!_isLoaded && !_isLoading && Info is DirectoryInfo)
+                if (!_isLoaded && !_isLoading && (Info is DirectoryInfo || _archiveEntry?.IsDirectory == true))
                 {
                     // Start async loading without blocking
                     _ = LoadChildrenAsync();
@@ -444,8 +446,8 @@ namespace VsixTreeViewer.MEF
 
             for (int i = 0; i < existingChildren.Count; i++)
             {
-                string existingPath = existingChildren[i].NodePath;
-                string newPath = newChildren[i].NodePath;
+                string existingPath = existingChildren[i].NodeIdentity;
+                string newPath = newChildren[i].NodeIdentity;
 
                 if (!string.Equals(existingPath, newPath, StringComparison.OrdinalIgnoreCase))
                 {
@@ -458,6 +460,7 @@ namespace VsixTreeViewer.MEF
 
         public string Text { get; set; }
         private string NodePath => _virtualPath ?? _archiveEntry?.FullName ?? Info?.FullName;
+        private string NodeIdentity => _archiveEntry?.Identity ?? NodePath;
         public string ToolTipText => null;
         public string StateToolTipText => null;
         public object ToolTipContent { get; set; }

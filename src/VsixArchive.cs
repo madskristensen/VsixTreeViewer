@@ -261,6 +261,7 @@ namespace VsixTreeViewer
         public VsixArchive Owner { get; internal set; }
         public string Name { get; }
         public string FullName { get; }
+        public string Identity => Owner.SnapshotPath + "|" + FullName;
         public bool IsDirectory { get; }
         public long Length { get; }
         public long CompressedLength { get; }
