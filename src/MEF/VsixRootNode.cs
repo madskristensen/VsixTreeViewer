@@ -27,6 +27,8 @@ namespace VsixTreeViewer
         private EnvDTE.Project _project;
         private FileSystemWatcher _vsixWatcher;
         private string _watchedDirectory;
+        private volatile bool _isBuilding;
+        private volatile bool _isDisposed;
 
         public VsixRootNode(IVsHierarchyItem hierarchyItem)
         {
@@ -41,12 +43,29 @@ namespace VsixTreeViewer
             _project = project;
 
             Rebuild(false);
+            _dte.Events.BuildEvents.OnBuildProjConfigBegin += BuildEvents_OnBuildProjConfigBegin;
             _dte.Events.BuildEvents.OnBuildProjConfigDone += BuildEvents_OnBuildProjConfigDone;
+        }
+
+        private void BuildEvents_OnBuildProjConfigBegin(string Project, string ProjectConfig, string Platform, string SolutionConfig)
+        {
+            if (IsMatchingProject(Project))
+            {
+                _isBuilding = true;
+                Debouncer.Cancel(_projectPath);
+            }
         }
 
         private void BuildEvents_OnBuildProjConfigDone(string Project, string ProjectConfig, string Platform, string SolutionConfig, bool Success)
         {
-            if (Success && IsMatchingProject(Project))
+            if (!IsMatchingProject(Project))
+            {
+                return;
+            }
+
+            _isBuilding = false;
+
+            if (Success)
             {
                 ScheduleRebuild(force: true);
             }
@@ -54,6 +73,11 @@ namespace VsixTreeViewer
 
         private void ScheduleRebuild(bool force)
         {
+            if (_isDisposed || _isBuilding)
+            {
+                return;
+            }
+
             Debouncer.Debounce(_projectPath, () => Rebuild(force), 500);
         }
 
@@ -94,10 +118,20 @@ namespace VsixTreeViewer
 
         private void Rebuild(bool force)
         {
+            if (_isDisposed)
+            {
+                return;
+            }
+
             ThreadHelper.JoinableTaskFactory.StartOnIdle(async () =>
             {
                 try
                 {
+                    if (_isDisposed)
+                    {
+                        return;
+                    }
+
                     await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
                     string outputDirectory = GetOutputDirectory();
                     string vsixPath = GetVsixPath(outputDirectory);
@@ -739,6 +773,14 @@ namespace VsixTreeViewer
 
         public void Dispose()
         {
+            if (_isDisposed)
+            {
+                return;
+            }
+
+            _isDisposed = true;
+            Debouncer.Cancel(_projectPath);
+            _dte.Events.BuildEvents.OnBuildProjConfigBegin -= BuildEvents_OnBuildProjConfigBegin;
             _dte.Events.BuildEvents.OnBuildProjConfigDone -= BuildEvents_OnBuildProjConfigDone;
             DisposeWatcher();
             _item?.Dispose();

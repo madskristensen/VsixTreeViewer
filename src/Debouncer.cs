@@ -1,4 +1,4 @@
-using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -6,48 +6,63 @@ namespace VsixTreeViewer
 {
     public static class Debouncer
     {
-        private static readonly ConcurrentDictionary<string, CancellationTokenSource> _tokens = new();
+        private static readonly Dictionary<string, CancellationTokenSource> _tokens = new();
+        private static readonly object _syncRoot = new();
 
         public static void Debounce(string uniqueKey, Action action, int milliseconds)
         {
-            CancellationTokenSource token = _tokens.AddOrUpdate(uniqueKey,
-                (key) => //key not found - create new
-                {
-                    return new CancellationTokenSource();
-                },
-                (key, existingToken) => //key found - cancel task and recreate
+            var tokenSource = new CancellationTokenSource();
+            CancellationToken token = tokenSource.Token;
+
+            lock (_syncRoot)
+            {
+                if (_tokens.TryGetValue(uniqueKey, out CancellationTokenSource existingToken))
                 {
                     existingToken.Cancel();
-                    existingToken.Dispose();
-                    return new CancellationTokenSource();
                 }
-            );
 
-            //schedule execution after pause
-            _ = Task.Delay(milliseconds, token.Token).ContinueWith(task =>
+                _tokens[uniqueKey] = tokenSource;
+            }
+
+            _ = Task.Delay(milliseconds, token).ContinueWith(task =>
             {
                 if (task.IsCanceled)
                 {
-                    CleanupToken(uniqueKey, token);
+                    CleanupToken(uniqueKey, tokenSource);
                     return;
                 }
 
                 try
                 {
-                    action(); //run
+                    action();
                 }
                 finally
                 {
-                    CleanupToken(uniqueKey, token);
+                    CleanupToken(uniqueKey, tokenSource);
                 }
-            }, token.Token, TaskContinuationOptions.None, TaskScheduler.Default); // Explicitly specify TaskScheduler.Default
+            }, CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default);
+        }
+
+        public static void Cancel(string uniqueKey)
+        {
+            lock (_syncRoot)
+            {
+                if (_tokens.TryGetValue(uniqueKey, out CancellationTokenSource token))
+                {
+                    _tokens.Remove(uniqueKey);
+                    token.Cancel();
+                }
+            }
         }
 
         private static void CleanupToken(string uniqueKey, CancellationTokenSource token)
         {
-            if (_tokens.TryGetValue(uniqueKey, out CancellationTokenSource currentToken) && ReferenceEquals(currentToken, token))
+            lock (_syncRoot)
             {
-                _tokens.TryRemove(uniqueKey, out _);
+                if (_tokens.TryGetValue(uniqueKey, out CancellationTokenSource currentToken) && ReferenceEquals(currentToken, token))
+                {
+                    _tokens.Remove(uniqueKey);
+                }
             }
 
             token.Dispose();
