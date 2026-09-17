@@ -57,10 +57,10 @@ jobs:
         vsix-token-source-file: ${{ env.VsixManifestSourcePath }}
 
     - name: Restore NuGet packages
-      run: msbuild ${{ env.Solution }} /v:m /t:Restore /p:Configuration=${{ env.Configuration }}
+      run: msbuild ${{ env.Solution }} /v:m /t:Restore /warnaserror /p:Configuration=${{ env.Configuration }}
 
     - name: Build
-      run: msbuild ${{ env.Solution }} /v:m /m /p:Configuration=${{ env.Configuration }} /p:DeployExtension=${{ env.DeployExtension }}
+      run: msbuild ${{ env.Solution }} /v:m /m /warnaserror /p:Configuration=${{ env.Configuration }} /p:DeployExtension=${{ env.DeployExtension }}
 
     - name: Run tests
       run: >
@@ -82,10 +82,22 @@ jobs:
         reporter: dotnet-trx
         fail-on-error: true
 
-    - name: Add coverage summary
+    - name: Verify tests and coverage
       if: ${{ !cancelled() }}
       shell: pwsh
       run: |
+        $testResult = Get-ChildItem "${{ env.TestResultsDirectory }}" -Filter "*.trx" -Recurse |
+          Select-Object -First 1
+        if (-not $testResult) {
+          throw "TRX test results were not produced."
+        }
+
+        [xml]$testRun = Get-Content $testResult.FullName
+        $testCount = [int]$testRun.TestRun.ResultSummary.Counters.total
+        if ($testCount -lt 40) {
+          throw "Expected at least 40 tests, but only $testCount were discovered."
+        }
+
         $coverageFile = Get-ChildItem "${{ env.TestResultsDirectory }}" -Filter "*.cobertura.xml" -Recurse |
           Select-Object -First 1
         if (-not $coverageFile) {
@@ -94,7 +106,18 @@ jobs:
 
         [xml]$coverage = Get-Content $coverageFile.FullName
         $lineCoverage = [double]$coverage.coverage.'line-rate'
-        "Code coverage: **$($lineCoverage.ToString('P2'))**" >> $env:GITHUB_STEP_SUMMARY
+        $branchCoverage = [double]$coverage.coverage.'branch-rate'
+
+        if ($lineCoverage -lt 0.44) {
+          throw "Line coverage $($lineCoverage.ToString('P2')) is below the 44% minimum."
+        }
+        if ($branchCoverage -lt 0.28) {
+          throw "Branch coverage $($branchCoverage.ToString('P2')) is below the 28% minimum."
+        }
+
+        "Tests: **$testCount**" >> $env:GITHUB_STEP_SUMMARY
+        "Line coverage: **$($lineCoverage.ToString('P2'))**" >> $env:GITHUB_STEP_SUMMARY
+        "Branch coverage: **$($branchCoverage.ToString('P2'))**" >> $env:GITHUB_STEP_SUMMARY
 
     - name: Upload artifact
       uses: actions/upload-artifact@v7

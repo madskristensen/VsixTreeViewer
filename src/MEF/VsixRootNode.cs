@@ -24,12 +24,12 @@ namespace VsixTreeViewer
         private readonly string _defaultName;
         private readonly object _watcherLock = new();
         private readonly object _snapshotLock = new();
+        private readonly VsixRefreshCoordinator _refreshCoordinator;
         private EnvDTE.Project _project;
         private FileSystemWatcher _vsixWatcher;
         private string _watchedDirectory;
         private string _snapshotPath;
         private string _vsixPath;
-        private volatile bool _isBuilding;
         private volatile bool _isDisposed;
 
         public VsixRootNode(IVsHierarchyItem hierarchyItem)
@@ -43,6 +43,7 @@ namespace VsixTreeViewer
             _projectPath = project.FullName;
             _projectDirectory = Path.GetDirectoryName(_projectPath);
             _project = project;
+            _refreshCoordinator = new VsixRefreshCoordinator(_projectPath, QueueRebuild);
 
             Rebuild(false);
             _dte.Events.BuildEvents.OnBuildProjConfigBegin += BuildEvents_OnBuildProjConfigBegin;
@@ -55,8 +56,7 @@ namespace VsixTreeViewer
 
             if (IsMatchingProject(Project))
             {
-                _isBuilding = true;
-                Debouncer.Cancel(_projectPath);
+                _refreshCoordinator.BuildStarted();
             }
         }
 
@@ -69,13 +69,9 @@ namespace VsixTreeViewer
                 return;
             }
 
-            _isBuilding = false;
+            _refreshCoordinator.BuildCompleted(Success);
 
-            if (Success)
-            {
-                ScheduleRebuild(force: true);
-            }
-            else
+            if (!Success)
             {
                 _item.RebuildError(_defaultName, "The project build failed. Fix the build errors and rebuild to inspect the generated VSIX package.");
             }
@@ -85,16 +81,21 @@ namespace VsixTreeViewer
         {
             ThreadHelper.ThrowIfNotOnUIThread();
 
-            if (_isDisposed || _isBuilding)
+            if (_isDisposed)
             {
                 return;
             }
 
-            Debouncer.Debounce(_projectPath, () => ThreadHelper.JoinableTaskFactory.Run(async () =>
+            _refreshCoordinator.Schedule(force);
+        }
+
+        private void QueueRebuild(bool force)
+        {
+            ThreadHelper.JoinableTaskFactory.Run(async () =>
             {
                 await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
                 Rebuild(force);
-            }), 500);
+            });
         }
 
         private bool IsMatchingProject(string projectFromEvent)
@@ -148,15 +149,16 @@ namespace VsixTreeViewer
                     }
 
                     await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
-                    string outputDirectory = GetOutputDirectory();
-                    string vsixPath = GetVsixPath(outputDirectory);
+                    VsixOutputLocatorOptions outputOptions = CreateOutputLocatorOptions();
+                    string outputDirectory = VsixOutputLocator.GetOutputDirectory(outputOptions);
+                    string vsixPath = VsixOutputLocator.FindVsix(outputOptions);
                     UpdateVsixWatcher(outputDirectory);
 
                     await TaskScheduler.Default;
 
                     if (!string.IsNullOrEmpty(vsixPath))
                     {
-                        string snapshotPath = CreateVsixSnapshot(vsixPath);
+                        string snapshotPath = VsixSnapshot.Create(vsixPath);
                         VsixArchive archive = !string.IsNullOrWhiteSpace(snapshotPath)
                             ? VsixArchive.Load(snapshotPath, vsixPath)
                             : null;
@@ -213,86 +215,19 @@ namespace VsixTreeViewer
             }
         }
 
-        private string GetOutputDirectory()
+        private VsixOutputLocatorOptions CreateOutputLocatorOptions()
         {
             ThreadHelper.ThrowIfNotOnUIThread();
 
-            string outputPath = GetOutputPathFromProject();
-            if (string.IsNullOrWhiteSpace(outputPath) || string.IsNullOrWhiteSpace(_projectDirectory))
+            return new VsixOutputLocatorOptions
             {
-                return null;
-            }
-
-            return Path.GetFullPath(Path.Combine(_projectDirectory, outputPath));
-        }
-
-        private string GetVsixPath(string outputDirectory)
-        {
-            ThreadHelper.ThrowIfNotOnUIThread();
-
-            string targetVsixContainer = GetTargetVsixContainerPath();
-            if (!string.IsNullOrWhiteSpace(targetVsixContainer) && File.Exists(targetVsixContainer))
-            {
-                return targetVsixContainer;
-            }
-
-            if (string.IsNullOrWhiteSpace(outputDirectory) || !Directory.Exists(outputDirectory))
-            {
-                return null;
-            }
-
-            var candidateDirectories = new List<string> { outputDirectory };
-            string targetFramework = GetEvaluatedProjectPropertyValue("TargetFramework");
-            if (!string.IsNullOrWhiteSpace(targetFramework))
-            {
-                candidateDirectories.Add(Path.Combine(outputDirectory, targetFramework));
-            }
-
-            string[] candidates = candidateDirectories
-                .Where(Directory.Exists)
-                .SelectMany(path => Directory.GetFiles(path, "*.vsix", SearchOption.TopDirectoryOnly))
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToArray();
-
-            if (candidates.Length == 0)
-            {
-                candidates = Directory.GetFiles(outputDirectory, "*.vsix", SearchOption.AllDirectories);
-            }
-
-            if (candidates.Length == 0)
-            {
-                return null;
-            }
-
-            HashSet<string> preferredNames = GetPreferredVsixFileNames();
-
-            return candidates
-                .OrderByDescending(path => preferredNames.Contains(Path.GetFileName(path)))
-                .ThenByDescending(path => File.GetLastWriteTimeUtc(path))
-                .ThenBy(path => Path.GetFileName(path), StringComparer.OrdinalIgnoreCase)
-                .FirstOrDefault();
-        }
-
-        private string GetTargetVsixContainerPath()
-        {
-            ThreadHelper.ThrowIfNotOnUIThread();
-
-            string targetVsixContainer = GetEvaluatedProjectPropertyValue("TargetVsixContainer");
-            if (!string.IsNullOrWhiteSpace(targetVsixContainer))
-            {
-                return Path.IsPathRooted(targetVsixContainer)
-                    ? Path.GetFullPath(targetVsixContainer)
-                    : Path.GetFullPath(Path.Combine(_projectDirectory, targetVsixContainer));
-            }
-
-            string targetVsixContainerName = GetEvaluatedProjectPropertyValue("TargetVsixContainerName");
-            string outputPath = GetOutputPathFromProject();
-            if (string.IsNullOrWhiteSpace(targetVsixContainerName) || string.IsNullOrWhiteSpace(outputPath))
-            {
-                return null;
-            }
-
-            return Path.GetFullPath(Path.Combine(_projectDirectory, outputPath, targetVsixContainerName));
+                ProjectDirectory = _projectDirectory,
+                OutputPath = GetOutputPathFromProject(),
+                TargetFramework = GetEvaluatedProjectPropertyValue("TargetFramework"),
+                TargetVsixContainer = GetEvaluatedProjectPropertyValue("TargetVsixContainer"),
+                TargetVsixContainerName = GetEvaluatedProjectPropertyValue("TargetVsixContainerName"),
+                PreferredFileNames = GetPreferredVsixFileNames()
+            };
         }
 
         private HashSet<string> GetPreferredVsixFileNames()
@@ -581,78 +516,6 @@ namespace VsixTreeViewer
                 WaitForBuildToFinish: false);
         }
 
-        private static string CreateVsixSnapshot(string vsixPath)
-        {
-            if (string.IsNullOrWhiteSpace(vsixPath) || !File.Exists(vsixPath))
-            {
-                return null;
-            }
-
-            const int maxAttempts = 10;
-
-            for (int attempt = 1; attempt <= maxAttempts; attempt++)
-            {
-                string sourceStamp = GetVsixStamp(vsixPath);
-                string snapshotDirectory = VsixTemporaryFiles.GetSnapshotDirectory(vsixPath);
-                string snapshotPath = Path.Combine(snapshotDirectory, VsixPathUtilities.GetPathKey(sourceStamp) + ".vsix");
-
-                try
-                {
-                    Directory.CreateDirectory(snapshotDirectory);
-
-                    if (File.Exists(snapshotPath))
-                    {
-                        return snapshotPath;
-                    }
-
-                    string temporaryPath = snapshotPath + "." + Path.GetRandomFileName();
-                    try
-                    {
-                        File.Copy(vsixPath, temporaryPath, overwrite: true);
-
-                        if (!string.Equals(sourceStamp, GetVsixStamp(vsixPath), StringComparison.Ordinal))
-                        {
-                            File.Delete(temporaryPath);
-                            System.Threading.Thread.Sleep(250);
-                            continue;
-                        }
-
-                        File.Move(temporaryPath, snapshotPath);
-                        return snapshotPath;
-                    }
-                    finally
-                    {
-                        if (File.Exists(temporaryPath))
-                        {
-                            File.Delete(temporaryPath);
-                        }
-                    }
-                }
-                catch (IOException)
-                {
-                    if (File.Exists(snapshotPath))
-                    {
-                        return snapshotPath;
-                    }
-
-                    if (attempt >= maxAttempts)
-                    {
-                        throw;
-                    }
-
-                    System.Threading.Thread.Sleep(250);
-                }
-            }
-
-            return null;
-        }
-
-        private static string GetVsixStamp(string vsixPath)
-        {
-            FileInfo fileInfo = new(vsixPath);
-            return $"{fileInfo.Length}:{fileInfo.LastWriteTimeUtc.Ticks}";
-        }
-
         private void SetActiveSnapshot(string snapshotPath)
         {
             string previousSnapshot;
@@ -840,7 +703,7 @@ namespace VsixTreeViewer
             }
 
             _isDisposed = true;
-            Debouncer.Cancel(_projectPath);
+            _refreshCoordinator.Dispose();
             SetActiveSnapshot(snapshotPath: null);
             DisposeWatcher();
             _item?.Dispose();

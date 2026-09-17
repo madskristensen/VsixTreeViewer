@@ -17,4 +17,11 @@
     <Reference Include="System.IO.Compression.FileSystem" />
   </ItemGroup>
 
+  <Target Name="CopyBuiltVsixForTests" AfterTargets="Build">
+    <Copy
+      SourceFiles="$(MSBuildProjectDirectory)\..\src\bin\$(Configuration)\net48\VsixTreeViewer.vsix"
+      DestinationFolder="$(OutDir)"
+      Condition="Exists('$(MSBuildProjectDirectory)\..\src\bin\$(Configuration)\net48\VsixTreeViewer.vsix')" />
+  </Target>
+
 </Project>

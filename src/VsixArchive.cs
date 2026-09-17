@@ -121,6 +121,7 @@ namespace VsixTreeViewer
                 }
 
                 Directory.CreateDirectory(Path.GetDirectoryName(targetPath));
+                SetReadOnly(targetPath, isReadOnly: false);
                 File.Copy(sourcePath, targetPath, overwrite: true);
                 SetReadOnly(targetPath, isReadOnly: false);
             }
@@ -222,8 +223,13 @@ namespace VsixTreeViewer
 
             public MutableEntry AddFile(string name, string fullName, long length, DateTimeOffset lastWriteTime)
             {
+                if (_children.TryGetValue(name, out MutableEntry existing))
+                {
+                    return existing;
+                }
+
                 var file = new MutableEntry(name, fullName, isDirectory: false, length, lastWriteTime);
-                _children[name] = file;
+                _children.Add(name, file);
                 return file;
             }
 

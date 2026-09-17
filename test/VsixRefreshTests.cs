@@ -24,6 +24,29 @@ public sealed class VsixRefreshTests
     }
 
     [TestMethod]
+    public void MatchesFullProjectPathCaseInsensitively()
+    {
+        Assert.IsTrue(ProjectBuildMatcher.IsMatch(
+            @"C:\repos\Extension\src\Extension.csproj",
+            projectUniqueName: null,
+            @"c:\REPOS\extension\SRC\extension.csproj"));
+    }
+
+    [TestMethod]
+    public void RejectsEmptyAndUnrelatedBuildEvents()
+    {
+        Assert.IsFalse(ProjectBuildMatcher.IsMatch(
+            @"C:\repos\Extension\src\Extension.csproj",
+            @"src\Extension.csproj",
+            projectFromEvent: null));
+
+        Assert.IsFalse(ProjectBuildMatcher.IsMatch(
+            @"C:\repos\Extension\src\Extension.csproj",
+            @"src\Extension.csproj",
+            @"Other.csproj"));
+    }
+
+    [TestMethod]
     public void SameEntryPathFromNewSnapshotHasNewIdentity()
     {
         string directory = Path.Combine(Path.GetTempPath(), nameof(VsixRefreshTests), Guid.NewGuid().ToString("N"));
