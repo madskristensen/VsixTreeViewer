@@ -67,7 +67,7 @@ namespace VsixTreeViewer
                 return null;
             }
 
-            string rootDirectory = Path.Combine(Path.GetTempPath(), Vsix.Name, "Files", VsixPathUtilities.GetPathKey(SnapshotPath));
+            string rootDirectory = VsixTemporaryFiles.GetMaterializedRoot(SnapshotPath);
             string targetPath = Path.GetFullPath(Path.Combine(rootDirectory, entry.FullName.Replace('/', Path.DirectorySeparatorChar)));
             string normalizedRoot = Path.GetFullPath(rootDirectory).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
 
@@ -93,6 +93,7 @@ namespace VsixTreeViewer
             }
 
             zipEntry.ExtractToFile(targetPath, overwrite: true);
+            VsixTemporaryFiles.TouchMaterializedRoot(rootDirectory);
             return targetPath;
         }
 

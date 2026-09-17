@@ -23,9 +23,11 @@ namespace VsixTreeViewer
         private readonly DTE _dte;
         private readonly string _defaultName;
         private readonly object _watcherLock = new();
+        private readonly object _snapshotLock = new();
         private EnvDTE.Project _project;
         private FileSystemWatcher _vsixWatcher;
         private string _watchedDirectory;
+        private string _snapshotPath;
         private volatile bool _isBuilding;
         private volatile bool _isDisposed;
 
@@ -148,6 +150,7 @@ namespace VsixTreeViewer
 
                         if (archive != null)
                         {
+                            SetActiveSnapshot(snapshotPath);
                             await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
                             _item.Rebuild(archive, vsixPath, tooltip);
                             return;
@@ -518,7 +521,7 @@ namespace VsixTreeViewer
             for (int attempt = 1; attempt <= maxAttempts; attempt++)
             {
                 string sourceStamp = GetVsixStamp(vsixPath);
-                string snapshotDirectory = Path.Combine(Path.GetTempPath(), Vsix.Name, "Snapshots", VsixPathUtilities.GetPathKey(vsixPath));
+                string snapshotDirectory = VsixTemporaryFiles.GetSnapshotDirectory(vsixPath);
                 string snapshotPath = Path.Combine(snapshotDirectory, VsixPathUtilities.GetPathKey(sourceStamp) + ".vsix");
 
                 try
@@ -582,6 +585,25 @@ namespace VsixTreeViewer
         {
             FileInfo fileInfo = new(vsixPath);
             return $"{fileInfo.Length}:{fileInfo.LastWriteTimeUtc.Ticks}";
+        }
+
+        private void SetActiveSnapshot(string snapshotPath)
+        {
+            string previousSnapshot;
+
+            lock (_snapshotLock)
+            {
+                if (string.Equals(_snapshotPath, snapshotPath, StringComparison.OrdinalIgnoreCase))
+                {
+                    return;
+                }
+
+                previousSnapshot = _snapshotPath;
+                _snapshotPath = snapshotPath;
+            }
+
+            VsixTemporaryFiles.UnregisterSnapshot(previousSnapshot);
+            VsixTemporaryFiles.RegisterSnapshot(snapshotPath);
         }
 
         private static string BuildMissingVsixTooltip(string outputDirectory)
@@ -752,6 +774,7 @@ namespace VsixTreeViewer
 
             _isDisposed = true;
             Debouncer.Cancel(_projectPath);
+            SetActiveSnapshot(snapshotPath: null);
             _dte.Events.BuildEvents.OnBuildProjConfigBegin -= BuildEvents_OnBuildProjConfigBegin;
             _dte.Events.BuildEvents.OnBuildProjConfigDone -= BuildEvents_OnBuildProjConfigDone;
             DisposeWatcher();
