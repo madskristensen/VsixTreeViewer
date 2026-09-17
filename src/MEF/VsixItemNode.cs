@@ -35,6 +35,7 @@ namespace VsixTreeViewer.MEF
         private bool _reloadRequested;
         private int _loadGeneration;
         private bool _showVsixIcon;
+        private bool _showErrorIcon;
         private readonly object _loadLock = new();
         private CancellationTokenSource _loadCancellationTokenSource;
         private VsixArchiveEntry _archiveEntry;
@@ -68,9 +69,33 @@ namespace VsixTreeViewer.MEF
             IsCut = archive == null;
             HasItems = archive?.Root.Children.Count > 0;
             _showVsixIcon = archive != null;
+            _showErrorIcon = false;
             ToolTipContent = tooltipContent;
 
             RaiseChangedProperties(oldText, oldIsCut, oldHasItems);
+        }
+
+        public void RebuildError(string displayName, string message)
+        {
+            ResetLoadingState();
+
+            string oldText = Text;
+            bool oldIsCut = IsCut;
+            bool oldHasItems = HasItems;
+
+            _archiveEntry = null;
+            Info = null;
+            Text = displayName;
+            IsCut = false;
+            HasItems = false;
+            _showVsixIcon = false;
+            _showErrorIcon = true;
+            ToolTipContent = message;
+
+            RaiseChangedProperties(oldText, oldIsCut, oldHasItems);
+            RaisePropertyChanged(nameof(IconMoniker));
+            RaisePropertyChanged(nameof(ExpandedIconMoniker));
+            RaisePropertyChanged(nameof(ToolTipContent));
         }
 
         public void Rebuild(string outputPath, string vsixPath, string tooltipContent = null)
@@ -113,6 +138,7 @@ namespace VsixTreeViewer.MEF
             _showVsixIcon = !string.IsNullOrEmpty(vsixPath) &&
                 !string.Equals(vsixPath, "root", StringComparison.OrdinalIgnoreCase) &&
                 vsixPath.EndsWith(".vsix", StringComparison.OrdinalIgnoreCase);
+            _showErrorIcon = false;
 
             RaiseChangedProperties(oldText, oldIsCut, oldHasItems);
 
@@ -524,6 +550,11 @@ namespace VsixTreeViewer.MEF
 
         private ImageMoniker GetIcon(bool isOpen)
         {
+            if (_showErrorIcon)
+            {
+                return KnownMonikers.StatusError;
+            }
+
             if (_showVsixIcon)
             {
                 return KnownMonikers.Extension;

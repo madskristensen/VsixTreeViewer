@@ -70,6 +70,10 @@ namespace VsixTreeViewer
             {
                 ScheduleRebuild(force: true);
             }
+            else
+            {
+                _item.RebuildError(_defaultName, "The project build failed. Fix the build errors and rebuild to inspect the generated VSIX package.");
+            }
         }
 
         private void ScheduleRebuild(bool force)
@@ -146,30 +150,54 @@ namespace VsixTreeViewer
                         VsixArchive archive = !string.IsNullOrWhiteSpace(snapshotPath)
                             ? VsixArchive.Load(snapshotPath)
                             : null;
-                        string tooltip = BuildTooltip(vsixPath, archive?.ManifestContent);
 
-                        if (archive != null)
+                        if (archive == null)
                         {
-                            SetActiveSnapshot(snapshotPath);
-                            await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
-                            _item.Rebuild(archive, vsixPath, tooltip);
+                            await ShowInspectionErrorAsync("The generated VSIX package could not be copied to a stable snapshot.");
                             return;
                         }
 
+                        string tooltip = BuildTooltip(vsixPath, archive?.ManifestContent);
+
+                        SetActiveSnapshot(snapshotPath);
                         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
-                        _item.Rebuild(_defaultName, "root", tooltip);
+                        _item.Rebuild(archive, vsixPath, tooltip);
                         return;
                     }
 
                     await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
                     _item.Rebuild(_defaultName, "root", BuildMissingVsixTooltip(outputDirectory));
                 }
+                catch (InvalidDataException ex)
+                {
+                    await ShowInspectionErrorAsync("The generated VSIX package is corrupt or is not a valid ZIP archive.", ex);
+                }
+                catch (UnauthorizedAccessException ex)
+                {
+                    await ShowInspectionErrorAsync("Access to the generated VSIX package or its output directory was denied.", ex);
+                }
+                catch (IOException ex)
+                {
+                    await ShowInspectionErrorAsync("The generated VSIX package is currently unavailable. It may still be locked by another process.", ex);
+                }
                 catch (Exception ex)
                 {
-                    ex.Log();
+                    await ShowInspectionErrorAsync("The generated VSIX package could not be inspected. See the Activity Log for details.", ex);
                 }
 
             }, VsTaskRunContext.UIThreadIdlePriority).FireAndForget();
+        }
+
+        private async Task ShowInspectionErrorAsync(string message, Exception exception = null)
+        {
+            exception?.Log();
+            SetActiveSnapshot(snapshotPath: null);
+            await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+
+            if (!_isDisposed)
+            {
+                _item.RebuildError(_defaultName, message);
+            }
         }
 
         private string GetOutputDirectory()
@@ -565,16 +593,10 @@ namespace VsixTreeViewer
 
                     if (attempt >= maxAttempts)
                     {
-                        ex.Log();
-                        return null;
+                        throw;
                     }
 
                     System.Threading.Thread.Sleep(250);
-                }
-                catch (UnauthorizedAccessException ex)
-                {
-                    ex.Log();
-                    return null;
                 }
             }
 

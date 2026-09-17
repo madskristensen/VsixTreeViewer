@@ -6,6 +6,22 @@ namespace VsixTreeViewer.Test;
 public sealed class VsixArchiveTests
 {
     [TestMethod]
+    public void RejectsInvalidArchive()
+    {
+        string archivePath = Path.GetTempFileName();
+
+        try
+        {
+            File.WriteAllText(archivePath, "not a zip archive");
+            Assert.ThrowsExactly<InvalidDataException>(() => VsixArchive.Load(archivePath));
+        }
+        finally
+        {
+            File.Delete(archivePath);
+        }
+    }
+
+    [TestMethod]
     public void MaterializesOnlyRequestedEntry()
     {
         string testDirectory = Path.Combine(Path.GetTempPath(), nameof(VsixArchiveTests), Guid.NewGuid().ToString("N"));
