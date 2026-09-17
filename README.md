@@ -25,7 +25,6 @@ VSIX Tree Viewer adds the generated `.vsix` package as an expandable node beneat
 - Refreshes automatically after successful builds and when an external process replaces the package.
 - Shows package identity, version, publisher, installation targets, size, and asset count in the root tooltip.
 - Shows visible error state for failed builds, corrupt packages, access failures, and locked output.
-- Compares consecutive successful builds and lists added, removed, and changed entries.
 
 ## Context menu commands
 
@@ -44,7 +43,7 @@ Right-click package folders and files to copy their package-relative paths. File
 
 The extension first checks the evaluated `TargetVsixContainer` and `TargetVsixContainerName` properties. It then checks the active output directory and target-framework subfolder. Recursive output-directory discovery is used only as a compatibility fallback.
 
-The live build output is copied to a stable temporary snapshot before inspection. Up to three recent snapshots are retained per project to support build comparison. Materialized files that have not been used for seven days are cleaned automatically.
+The live build output is copied to a stable temporary snapshot before inspection. Recent snapshots are retained temporarily, and materialized files that have not been used for seven days are cleaned automatically.
 
 ## Temporary files
 
