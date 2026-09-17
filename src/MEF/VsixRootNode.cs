@@ -141,7 +141,8 @@ namespace VsixTreeViewer
 
                     if (!string.IsNullOrEmpty(vsixPath))
                     {
-                        string unpackedPath = UnpackVsix(vsixPath, force);
+                        string snapshotPath = CreateVsixSnapshot(vsixPath);
+                        string unpackedPath = UnpackVsix(snapshotPath, force);
                         string tooltip = BuildTooltip(vsixPath, unpackedPath);
 
                         if (!string.IsNullOrEmpty(unpackedPath))
@@ -442,6 +443,78 @@ namespace VsixTreeViewer
         public object SourceItem => this;
         public bool HasItems => _item != null;
         public IEnumerable Items => _items;
+
+        private static string CreateVsixSnapshot(string vsixPath)
+        {
+            if (string.IsNullOrWhiteSpace(vsixPath) || !File.Exists(vsixPath))
+            {
+                return null;
+            }
+
+            const int maxAttempts = 10;
+
+            for (int attempt = 1; attempt <= maxAttempts; attempt++)
+            {
+                string sourceStamp = GetVsixStamp(vsixPath);
+                string snapshotDirectory = Path.Combine(Path.GetTempPath(), Vsix.Name, "Snapshots", GetPathKey(vsixPath));
+                string snapshotPath = Path.Combine(snapshotDirectory, GetPathKey(sourceStamp) + ".vsix");
+
+                try
+                {
+                    Directory.CreateDirectory(snapshotDirectory);
+
+                    if (File.Exists(snapshotPath))
+                    {
+                        return snapshotPath;
+                    }
+
+                    string temporaryPath = snapshotPath + "." + Path.GetRandomFileName();
+                    try
+                    {
+                        File.Copy(vsixPath, temporaryPath, overwrite: true);
+
+                        if (!string.Equals(sourceStamp, GetVsixStamp(vsixPath), StringComparison.Ordinal))
+                        {
+                            File.Delete(temporaryPath);
+                            System.Threading.Thread.Sleep(250);
+                            continue;
+                        }
+
+                        File.Move(temporaryPath, snapshotPath);
+                        return snapshotPath;
+                    }
+                    finally
+                    {
+                        if (File.Exists(temporaryPath))
+                        {
+                            File.Delete(temporaryPath);
+                        }
+                    }
+                }
+                catch (IOException ex)
+                {
+                    if (File.Exists(snapshotPath))
+                    {
+                        return snapshotPath;
+                    }
+
+                    if (attempt >= maxAttempts)
+                    {
+                        ex.Log();
+                        return null;
+                    }
+
+                    System.Threading.Thread.Sleep(250);
+                }
+                catch (UnauthorizedAccessException ex)
+                {
+                    ex.Log();
+                    return null;
+                }
+            }
+
+            return null;
+        }
 
         private string UnpackVsix(string vsixPath, bool force)
         {
