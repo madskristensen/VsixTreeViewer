@@ -20,6 +20,22 @@ namespace VsixTreeViewer
             return Path.Combine(GetRootDirectory(), "Files", VsixPathUtilities.GetPathKey(snapshotPath));
         }
 
+        public static string GetPreviousSnapshot(string sourcePath, string currentSnapshot)
+        {
+            string snapshotDirectory = GetSnapshotDirectory(sourcePath);
+            if (!Directory.Exists(snapshotDirectory))
+            {
+                return null;
+            }
+
+            return new DirectoryInfo(snapshotDirectory)
+                .EnumerateFiles("*.vsix")
+                .Where(file => !string.Equals(file.FullName, currentSnapshot, StringComparison.OrdinalIgnoreCase))
+                .OrderByDescending(file => file.LastWriteTimeUtc)
+                .Select(file => file.FullName)
+                .FirstOrDefault();
+        }
+
         public static void RegisterSnapshot(string snapshotPath)
         {
             if (!string.IsNullOrWhiteSpace(snapshotPath))

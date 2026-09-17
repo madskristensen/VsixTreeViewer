@@ -39,6 +39,9 @@ namespace VsixTreeViewer.MEF
         private readonly object _loadLock = new();
         private CancellationTokenSource _loadCancellationTokenSource;
         private VsixArchiveEntry _archiveEntry;
+        private IReadOnlyList<VsixItemNode> _virtualChildren;
+        private string _virtualPath;
+        private bool _isVirtualDirectory;
 
         public VsixItemNode(IAttachedCollectionSource source, string outputPath, string vsixPath, string tooltipContent = null)
         {
@@ -53,6 +56,15 @@ namespace VsixTreeViewer.MEF
             Text = archiveEntry.Name;
             ToolTipContent = SetArchiveTooltip(archiveEntry);
             HasItems = archiveEntry.IsDirectory && archiveEntry.Children.Count > 0;
+        }
+
+        private VsixItemNode(IAttachedCollectionSource source, string text, string tooltip, string virtualPath, bool isDirectory)
+        {
+            SourceItem = source;
+            Text = text;
+            ToolTipContent = tooltip;
+            _virtualPath = virtualPath;
+            _isVirtualDirectory = isDirectory;
         }
 
         public void Rebuild(VsixArchive archive, string vsixPath, string tooltipContent)
@@ -212,6 +224,11 @@ namespace VsixTreeViewer.MEF
         {
             get
             {
+                if (_virtualChildren != null)
+                {
+                    return _virtualChildren;
+                }
+
                 _children ??= [];
 
                 if (!_isLoaded && !_isLoading && Info is DirectoryInfo)
@@ -317,6 +334,11 @@ namespace VsixTreeViewer.MEF
 
             if (_archiveEntry?.IsDirectory == true)
             {
+                if (IsArchiveRoot && RootNode?.Comparison?.HasChanges == true)
+                {
+                    activeNodes.Add(CreateComparisonNode(this, RootNode.Comparison));
+                }
+
                 foreach (VsixArchiveEntry entry in _archiveEntry.Children)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
@@ -435,7 +457,7 @@ namespace VsixTreeViewer.MEF
         }
 
         public string Text { get; set; }
-        private string NodePath => _archiveEntry?.FullName ?? Info?.FullName;
+        private string NodePath => _virtualPath ?? _archiveEntry?.FullName ?? Info?.FullName;
         public string ToolTipText => null;
         public string StateToolTipText => null;
         public object ToolTipContent { get; set; }
@@ -462,7 +484,7 @@ namespace VsixTreeViewer.MEF
                 }
             }
         }
-        public bool CanPreview => Info is FileInfo || _archiveEntry?.IsDirectory == false;
+        public bool CanPreview => _virtualPath == null && (Info is FileInfo || _archiveEntry?.IsDirectory == false);
 
         public IInvocationController InvocationController => VsixItemInvocationController.Instance;
         public IContextMenuController ContextMenuController => VsixContextMenuController.Instance;
@@ -555,7 +577,7 @@ namespace VsixTreeViewer.MEF
             return _stringComparer.Compare(Text, node.Text);
         }
 
-        internal bool IsDirectory => _archiveEntry?.IsDirectory ?? Info is DirectoryInfo;
+        internal bool IsDirectory => _virtualPath != null ? _isVirtualDirectory : _archiveEntry?.IsDirectory ?? Info is DirectoryInfo;
 
         internal string GetOpenPath()
         {
@@ -577,6 +599,13 @@ namespace VsixTreeViewer.MEF
             if (_showVsixIcon)
             {
                 return KnownMonikers.Extension;
+            }
+
+            if (_virtualPath != null)
+            {
+                return _isVirtualDirectory
+                    ? isOpen ? KnownMonikers.FolderOpened : KnownMonikers.FolderClosed
+                    : KnownMonikers.StatusInformation;
             }
 
             if (_archiveEntry != null)
@@ -611,6 +640,49 @@ namespace VsixTreeViewer.MEF
             }
 
             return $"Size: {entry.Length:N0} bytes\r\nPackage path: {entry.FullName}";
+        }
+
+        private static VsixItemNode CreateComparisonNode(IAttachedCollectionSource source, VsixArchiveComparison comparison)
+        {
+            var root = new VsixItemNode(
+                source,
+                "Changes from previous build",
+                $"+{comparison.Added.Count:N0} added, -{comparison.Removed.Count:N0} removed, ~{comparison.Changed.Count:N0} changed",
+                virtualPath: "comparison",
+                isDirectory: true);
+
+            var categories = new List<VsixItemNode>();
+            AddComparisonCategory(root, categories, "Added", comparison.Added);
+            AddComparisonCategory(root, categories, "Removed", comparison.Removed);
+            AddComparisonCategory(root, categories, "Changed", comparison.Changed);
+            root._virtualChildren = categories;
+            root.HasItems = categories.Count > 0;
+            return root;
+        }
+
+        private static void AddComparisonCategory(
+            VsixItemNode root,
+            ICollection<VsixItemNode> categories,
+            string category,
+            IReadOnlyList<string> paths)
+        {
+            if (paths.Count == 0)
+            {
+                return;
+            }
+
+            var categoryNode = new VsixItemNode(
+                root,
+                $"{category} ({paths.Count:N0})",
+                $"{paths.Count:N0} package entries {category.ToLowerInvariant()} since the previous build.",
+                virtualPath: "comparison/" + category,
+                isDirectory: true);
+
+            categoryNode._virtualChildren = paths
+                .Select(path => new VsixItemNode(categoryNode, path, path, "comparison/" + category + "/" + path, isDirectory: false))
+                .ToArray();
+            categoryNode.HasItems = true;
+            categories.Add(categoryNode);
         }
 
         public void Dispose()
@@ -657,9 +729,13 @@ namespace VsixTreeViewer.MEF
                 if (patternType == typeof(ITreeDisplayItem) ||
                     patternType == typeof(IBrowsablePattern) ||
                     patternType == typeof(IInvocationPattern) ||
-                    patternType == typeof(IContextMenuPattern) ||
                     patternType == typeof(ISupportDisposalNotification) ||
                     patternType == typeof(IRefreshPattern))
+                {
+                    return this as TPattern;
+                }
+
+                if (patternType == typeof(IContextMenuPattern) && _archiveEntry != null)
                 {
                     return this as TPattern;
                 }

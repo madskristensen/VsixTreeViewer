@@ -52,7 +52,7 @@ namespace VsixTreeViewer
                         || zipEntry.FullName.EndsWith("\\", StringComparison.Ordinal);
                     MutableEntry entry = isDirectory
                         ? parent.GetOrAddDirectory(segments[segments.Length - 1])
-                        : parent.AddFile(segments[segments.Length - 1], zipEntry.FullName.Replace('\\', '/'), zipEntry.Length, zipEntry.LastWriteTime);
+                        : parent.AddFile(segments[segments.Length - 1], zipEntry.FullName.Replace('\\', '/'), zipEntry.Length, zipEntry.CompressedLength, zipEntry.LastWriteTime);
 
                     if (!isDirectory && manifestContent == null && entry.Name.EndsWith(".vsixmanifest", StringComparison.OrdinalIgnoreCase))
                     {
@@ -173,11 +173,17 @@ namespace VsixTreeViewer
             private readonly Dictionary<string, MutableEntry> _children = new(StringComparer.OrdinalIgnoreCase);
 
             public MutableEntry(string name, string fullName, bool isDirectory, long length, DateTimeOffset lastWriteTime)
+                : this(name, fullName, isDirectory, length, compressedLength: 0, lastWriteTime)
+            {
+            }
+
+            private MutableEntry(string name, string fullName, bool isDirectory, long length, long compressedLength, DateTimeOffset lastWriteTime)
             {
                 Name = name;
                 FullName = fullName;
                 IsDirectory = isDirectory;
                 Length = length;
+                CompressedLength = compressedLength;
                 LastWriteTime = lastWriteTime;
             }
 
@@ -185,6 +191,7 @@ namespace VsixTreeViewer
             public string FullName { get; }
             public bool IsDirectory { get; }
             public long Length { get; }
+            public long CompressedLength { get; }
             public DateTimeOffset LastWriteTime { get; }
 
             public MutableEntry GetOrAddDirectory(string name)
@@ -200,16 +207,16 @@ namespace VsixTreeViewer
                 return directory;
             }
 
-            public MutableEntry AddFile(string name, string fullName, long length, DateTimeOffset lastWriteTime)
+            public MutableEntry AddFile(string name, string fullName, long length, long compressedLength, DateTimeOffset lastWriteTime)
             {
-                var file = new MutableEntry(name, fullName, isDirectory: false, length, lastWriteTime);
+                var file = new MutableEntry(name, fullName, isDirectory: false, length, compressedLength, lastWriteTime);
                 _children[name] = file;
                 return file;
             }
 
             public VsixArchiveEntry Freeze(VsixArchive owner)
             {
-                var entry = new VsixArchiveEntry(owner, Name, FullName, IsDirectory, Length, LastWriteTime);
+                var entry = new VsixArchiveEntry(owner, Name, FullName, IsDirectory, Length, CompressedLength, LastWriteTime);
                 entry.SetChildren(_children.Values.Select(child => child.Freeze(owner)).ToArray());
                 return entry;
             }
@@ -220,13 +227,14 @@ namespace VsixTreeViewer
     {
         private IReadOnlyList<VsixArchiveEntry> _children = Array.Empty<VsixArchiveEntry>();
 
-        internal VsixArchiveEntry(VsixArchive owner, string name, string fullName, bool isDirectory, long length, DateTimeOffset lastWriteTime)
+        internal VsixArchiveEntry(VsixArchive owner, string name, string fullName, bool isDirectory, long length, long compressedLength, DateTimeOffset lastWriteTime)
         {
             Owner = owner;
             Name = name;
             FullName = fullName;
             IsDirectory = isDirectory;
             Length = length;
+            CompressedLength = compressedLength;
             LastWriteTime = lastWriteTime;
         }
 
@@ -235,6 +243,7 @@ namespace VsixTreeViewer
         public string FullName { get; }
         public bool IsDirectory { get; }
         public long Length { get; }
+        public long CompressedLength { get; }
         public DateTimeOffset LastWriteTime { get; }
         public IReadOnlyList<VsixArchiveEntry> Children => _children;
 

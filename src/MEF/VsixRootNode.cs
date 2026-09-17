@@ -158,7 +158,8 @@ namespace VsixTreeViewer
                             return;
                         }
 
-                        string tooltip = BuildTooltip(vsixPath, archive?.ManifestContent);
+                        Comparison = CreateComparison(vsixPath, snapshotPath, archive);
+                        string tooltip = BuildTooltip(vsixPath, archive.ManifestContent, Comparison);
 
                         SetActiveSnapshot(snapshotPath);
                         _vsixPath = vsixPath;
@@ -169,6 +170,7 @@ namespace VsixTreeViewer
 
                     await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
                     _vsixPath = null;
+                    Comparison = null;
                     _item.Rebuild(_defaultName, "root", BuildMissingVsixTooltip(outputDirectory));
                 }
                 catch (InvalidDataException ex)
@@ -196,6 +198,7 @@ namespace VsixTreeViewer
             exception?.Log();
             SetActiveSnapshot(snapshotPath: null);
             _vsixPath = null;
+            Comparison = null;
             await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
 
             if (!_isDisposed)
@@ -541,6 +544,7 @@ namespace VsixTreeViewer
         public bool HasItems => _item != null;
         public IEnumerable Items => _items;
         internal string VsixPath => _vsixPath;
+        internal VsixArchiveComparison Comparison { get; private set; }
 
         internal void Refresh()
         {
@@ -635,6 +639,35 @@ namespace VsixTreeViewer
             return $"{fileInfo.Length}:{fileInfo.LastWriteTimeUtc.Ticks}";
         }
 
+        private static VsixArchiveComparison CreateComparison(string sourcePath, string currentSnapshot, VsixArchive currentArchive)
+        {
+            string previousSnapshot = VsixTemporaryFiles.GetPreviousSnapshot(sourcePath, currentSnapshot);
+            if (string.IsNullOrWhiteSpace(previousSnapshot))
+            {
+                return null;
+            }
+
+            try
+            {
+                return VsixArchiveComparison.Create(VsixArchive.Load(previousSnapshot), currentArchive);
+            }
+            catch (InvalidDataException ex)
+            {
+                ex.Log();
+                return null;
+            }
+            catch (IOException ex)
+            {
+                ex.Log();
+                return null;
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                ex.Log();
+                return null;
+            }
+        }
+
         private void SetActiveSnapshot(string snapshotPath)
         {
             string previousSnapshot;
@@ -664,7 +697,7 @@ namespace VsixTreeViewer
             return $"Build the project to browse its generated VSIX package.\r\nExpected output folder: {outputDirectory}";
         }
 
-        private static string BuildTooltip(string vsixPath, string manifestContent)
+        private static string BuildTooltip(string vsixPath, string manifestContent, VsixArchiveComparison comparison)
         {
             if (string.IsNullOrWhiteSpace(vsixPath) || !File.Exists(vsixPath))
             {
@@ -679,8 +712,22 @@ namespace VsixTreeViewer
             AppendTooltipLine(tooltip, "Last updated", fileInfo.LastWriteTime.ToString());
 
             AddManifestMetadata(tooltip, manifestContent);
+            AddComparisonMetadata(tooltip, comparison);
 
             return tooltip.ToString().TrimEnd();
+        }
+
+        private static void AddComparisonMetadata(StringBuilder tooltip, VsixArchiveComparison comparison)
+        {
+            if (comparison == null)
+            {
+                return;
+            }
+
+            AppendTooltipLine(
+                tooltip,
+                "Changes",
+                $"+{comparison.Added.Count:N0}  -{comparison.Removed.Count:N0}  ~{comparison.Changed.Count:N0}");
         }
 
         private static void AddManifestMetadata(StringBuilder tooltip, string manifestContent)
