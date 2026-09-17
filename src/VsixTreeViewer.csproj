@@ -14,6 +14,7 @@
 
     <ItemGroup>
         <ProjectCapability Include="CreateVsixContainer" />
+        <InternalsVisibleTo Include="VsixTreeViewer.Test" />
     </ItemGroup>
 
     <!-- Auto-generated files (use Update because SDK auto-includes *.cs) -->

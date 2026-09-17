@@ -4,7 +4,6 @@ using System.ComponentModel;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
-using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
@@ -142,13 +141,15 @@ namespace VsixTreeViewer
                     if (!string.IsNullOrEmpty(vsixPath))
                     {
                         string snapshotPath = CreateVsixSnapshot(vsixPath);
-                        string unpackedPath = UnpackVsix(snapshotPath, force);
-                        string tooltip = BuildTooltip(vsixPath, unpackedPath);
+                        VsixArchive archive = !string.IsNullOrWhiteSpace(snapshotPath)
+                            ? VsixArchive.Load(snapshotPath)
+                            : null;
+                        string tooltip = BuildTooltip(vsixPath, archive?.ManifestContent);
 
-                        if (!string.IsNullOrEmpty(unpackedPath))
+                        if (archive != null)
                         {
                             await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
-                            _item.Rebuild(unpackedPath, vsixPath, tooltip);
+                            _item.Rebuild(archive, vsixPath, tooltip);
                             return;
                         }
 
@@ -517,8 +518,8 @@ namespace VsixTreeViewer
             for (int attempt = 1; attempt <= maxAttempts; attempt++)
             {
                 string sourceStamp = GetVsixStamp(vsixPath);
-                string snapshotDirectory = Path.Combine(Path.GetTempPath(), Vsix.Name, "Snapshots", GetPathKey(vsixPath));
-                string snapshotPath = Path.Combine(snapshotDirectory, GetPathKey(sourceStamp) + ".vsix");
+                string snapshotDirectory = Path.Combine(Path.GetTempPath(), Vsix.Name, "Snapshots", VsixPathUtilities.GetPathKey(vsixPath));
+                string snapshotPath = Path.Combine(snapshotDirectory, VsixPathUtilities.GetPathKey(sourceStamp) + ".vsix");
 
                 try
                 {
@@ -577,160 +578,10 @@ namespace VsixTreeViewer
             return null;
         }
 
-        private string UnpackVsix(string vsixPath, bool force)
-        {
-            if (!File.Exists(vsixPath))
-            {
-                return null;
-            }
-
-            string path = GetExtractionPath(vsixPath);
-            string currentStamp = GetVsixStamp(vsixPath);
-
-            if (Directory.Exists(path))
-            {
-                if (!force && IsExtractionCurrent(path, currentStamp))
-                {
-                    return path;
-                }
-
-                try
-                {
-                    Directory.Delete(path, true);
-                }
-                catch (IOException ex)
-                {
-                    ex.Log();
-                    return null;
-                }
-                catch (UnauthorizedAccessException ex)
-                {
-                    ex.Log();
-                    return null;
-                }
-            }
-
-            // The file watcher can fire while MSBuild is still writing the .vsix, so the
-            // file may be locked by another process. Wait for the lock to be released
-            // before attempting to extract it.
-            WaitForFileReady(vsixPath);
-
-            const int maxAttempts = 10;
-            for (int attempt = 1; ; attempt++)
-            {
-                try
-                {
-                    System.IO.Compression.ZipFile.ExtractToDirectory(vsixPath, path);
-                    WriteExtractionStamp(path, currentStamp);
-                    return path;
-                }
-                catch (IOException ex)
-                {
-                    if (attempt >= maxAttempts)
-                    {
-                        ex.Log();
-                        return null;
-                    }
-
-                    // The .vsix (or a partially extracted file) is still locked. Clean up any
-                    // partial extraction and retry after a short delay.
-                    TryDeleteDirectory(path);
-                    System.Threading.Thread.Sleep(250);
-                }
-                catch (UnauthorizedAccessException ex)
-                {
-                    ex.Log();
-                    return null;
-                }
-            }
-        }
-
-        private static void WaitForFileReady(string filePath)
-        {
-            const int maxAttempts = 20;
-
-            for (int attempt = 1; attempt <= maxAttempts; attempt++)
-            {
-                try
-                {
-                    using (FileStream stream = File.Open(filePath, FileMode.Open, FileAccess.Read, FileShare.Read))
-                    {
-                        return;
-                    }
-                }
-                catch (IOException)
-                {
-                    if (attempt >= maxAttempts)
-                    {
-                        return;
-                    }
-
-                    System.Threading.Thread.Sleep(250);
-                }
-            }
-        }
-
-        private static void TryDeleteDirectory(string path)
-        {
-            try
-            {
-                if (Directory.Exists(path))
-                {
-                    Directory.Delete(path, true);
-                }
-            }
-            catch (IOException)
-            {
-            }
-            catch (UnauthorizedAccessException)
-            {
-            }
-        }
-
-        private static string GetExtractionPath(string vsixPath)
-        {
-            return Path.Combine(Path.GetTempPath(), Vsix.Name, GetPathKey(vsixPath));
-        }
-
-        private static string GetPathKey(string path)
-        {
-            byte[] pathBytes = Encoding.UTF8.GetBytes(path);
-            byte[] hashBytes;
-
-            using (SHA256 sha256 = SHA256.Create())
-            {
-                hashBytes = sha256.ComputeHash(pathBytes);
-            }
-
-            var builder = new StringBuilder(16);
-            for (int i = 0; i < 8; i++)
-            {
-                builder.Append(hashBytes[i].ToString("x2"));
-            }
-
-            return builder.ToString();
-        }
-
-        private static string GetStampPath(string extractionPath)
-        {
-            return Path.Combine(extractionPath, ".vsixstamp");
-        }
-
         private static string GetVsixStamp(string vsixPath)
         {
             FileInfo fileInfo = new(vsixPath);
             return $"{fileInfo.Length}:{fileInfo.LastWriteTimeUtc.Ticks}";
-        }
-
-        private static bool IsExtractionCurrent(string extractionPath, string currentStamp)
-        {
-            string stampPath = GetStampPath(extractionPath);
-            return File.Exists(stampPath) && string.Equals(File.ReadAllText(stampPath), currentStamp, StringComparison.Ordinal);
-        }
-
-        private static void WriteExtractionStamp(string extractionPath, string currentStamp)
-        {
-            File.WriteAllText(GetStampPath(extractionPath), currentStamp);
         }
 
         private static string BuildMissingVsixTooltip(string outputDirectory)
@@ -743,7 +594,7 @@ namespace VsixTreeViewer
             return $"Build the project to browse its generated VSIX package.\r\nExpected output folder: {outputDirectory}";
         }
 
-        private static string BuildTooltip(string vsixPath, string extractedPath)
+        private static string BuildTooltip(string vsixPath, string manifestContent)
         {
             if (string.IsNullOrWhiteSpace(vsixPath) || !File.Exists(vsixPath))
             {
@@ -757,23 +608,20 @@ namespace VsixTreeViewer
             AppendTooltipLine(tooltip, "Size", fileInfo.Length.ToString("N0") + " bytes");
             AppendTooltipLine(tooltip, "Last updated", fileInfo.LastWriteTime.ToString());
 
-            AddManifestMetadata(tooltip, extractedPath);
+            AddManifestMetadata(tooltip, manifestContent);
 
             return tooltip.ToString().TrimEnd();
         }
 
-        private static void AddManifestMetadata(StringBuilder tooltip, string extractedPath)
+        private static void AddManifestMetadata(StringBuilder tooltip, string manifestContent)
         {
-            string manifestPath = GetManifestPath(extractedPath);
-            if (string.IsNullOrWhiteSpace(manifestPath))
+            if (string.IsNullOrWhiteSpace(manifestContent))
             {
                 return;
             }
 
             try
             {
-                string manifestContent = File.ReadAllText(manifestPath);
-
                 AppendTooltipLine(tooltip, "Display name", GetManifestElementValue(manifestContent, "DisplayName"));
                 AppendTooltipLine(tooltip, "ID", GetManifestAttributeValue(manifestContent, "Identity", "Id"));
                 AppendTooltipLine(tooltip, "Version", GetManifestAttributeValue(manifestContent, "Identity", "Version"));
@@ -795,16 +643,6 @@ namespace VsixTreeViewer
             {
                 ex.Log();
             }
-        }
-
-        private static string GetManifestPath(string extractedPath)
-        {
-            if (string.IsNullOrWhiteSpace(extractedPath) || !Directory.Exists(extractedPath))
-            {
-                return null;
-            }
-
-            return Directory.GetFiles(extractedPath, "*.vsixmanifest", SearchOption.TopDirectoryOnly).FirstOrDefault();
         }
 
         private static string GetManifestElementValue(string manifestContent, string elementName)

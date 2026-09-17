@@ -44,5 +44,18 @@ namespace VsixTreeViewer
                 ? KnownMonikers.Extension
                 : isOpen ? KnownMonikers.FolderOpened : KnownMonikers.FolderClosed;
         }
+
+        public static ImageMoniker GetIcon(string name, bool isDirectory, bool isOpen)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+
+            if (isDirectory)
+            {
+                return isOpen ? KnownMonikers.FolderOpened : KnownMonikers.FolderClosed;
+            }
+
+            ImageMoniker moniker = GetImageService().GetImageMonikerForFile(name);
+            return moniker.Id < 0 ? KnownMonikers.Document : moniker;
+        }
     }
 }

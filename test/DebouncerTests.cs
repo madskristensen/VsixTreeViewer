@@ -2,7 +2,6 @@ using System.Collections.Concurrent;
 
 namespace VsixTreeViewer.Test;
 
-[DoNotParallelize]
 [TestClass]
 public sealed class DebouncerTests
 {

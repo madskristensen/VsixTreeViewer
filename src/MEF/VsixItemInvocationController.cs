@@ -3,6 +3,7 @@ using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.Internal.VisualStudio.PlatformUI;
+using Microsoft.VisualStudio.Threading;
 
 namespace VsixTreeViewer.MEF
 {
@@ -20,9 +21,9 @@ namespace VsixTreeViewer.MEF
         {
             foreach (VsixItemNode item in items.OfType<VsixItemNode>())
             {
-                if (item.Info is FileInfo)
+                if (!item.IsDirectory)
                 {
-                    ObserveTask(OpenItemAsync(item.Info.FullName, preview));
+                    ObserveTask(OpenItemAsync(item, preview));
                 }
                 else
                 {
@@ -31,6 +32,17 @@ namespace VsixTreeViewer.MEF
             }
 
             return true;
+        }
+
+        private static async Task OpenItemAsync(VsixItemNode item, bool preview)
+        {
+            await TaskScheduler.Default;
+            string filePath = item.GetOpenPath();
+
+            if (!string.IsNullOrWhiteSpace(filePath))
+            {
+                await OpenItemAsync(filePath, preview);
+            }
         }
 
         private static async Task OpenItemAsync(string filePath, bool preview)

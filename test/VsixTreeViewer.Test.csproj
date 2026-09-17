@@ -12,4 +12,9 @@
     <ProjectReference Include="..\src\VsixTreeViewer.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Reference Include="System.IO.Compression" />
+    <Reference Include="System.IO.Compression.FileSystem" />
+  </ItemGroup>
+
 </Project>

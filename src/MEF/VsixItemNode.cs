@@ -37,11 +37,40 @@ namespace VsixTreeViewer.MEF
         private bool _showVsixIcon;
         private readonly object _loadLock = new();
         private CancellationTokenSource _loadCancellationTokenSource;
+        private VsixArchiveEntry _archiveEntry;
 
         public VsixItemNode(IAttachedCollectionSource source, string outputPath, string vsixPath, string tooltipContent = null)
         {
             SourceItem = source;
             Rebuild(outputPath, vsixPath, tooltipContent);
+        }
+
+        private VsixItemNode(IAttachedCollectionSource source, VsixArchiveEntry archiveEntry)
+        {
+            SourceItem = source;
+            _archiveEntry = archiveEntry;
+            Text = archiveEntry.Name;
+            ToolTipContent = SetArchiveTooltip(archiveEntry);
+            HasItems = archiveEntry.IsDirectory && archiveEntry.Children.Count > 0;
+        }
+
+        public void Rebuild(VsixArchive archive, string vsixPath, string tooltipContent)
+        {
+            ResetLoadingState();
+
+            string oldText = Text;
+            bool oldIsCut = IsCut;
+            bool oldHasItems = HasItems;
+
+            _archiveEntry = archive?.Root;
+            Info = null;
+            Text = archive != null ? Path.GetFileName(vsixPath) : Path.GetFileName(vsixPath) ?? ".vsix content";
+            IsCut = archive == null;
+            HasItems = archive?.Root.Children.Count > 0;
+            _showVsixIcon = archive != null;
+            ToolTipContent = tooltipContent;
+
+            RaiseChangedProperties(oldText, oldIsCut, oldHasItems);
         }
 
         public void Rebuild(string outputPath, string vsixPath, string tooltipContent = null)
@@ -53,17 +82,8 @@ namespace VsixTreeViewer.MEF
             FileSystemInfo newInfo;
             bool newHasItems;
 
-            lock (_loadLock)
-            {
-                _isLoaded = false;
-                _loadGeneration++;
-
-                if (_isLoading)
-                {
-                    _reloadRequested = true;
-                    _loadCancellationTokenSource?.Cancel();
-                }
-            }
+            ResetLoadingState();
+            _archiveEntry = null;
 
             if (Directory.Exists(outputPath))
             {
@@ -94,6 +114,37 @@ namespace VsixTreeViewer.MEF
                 !string.Equals(vsixPath, "root", StringComparison.OrdinalIgnoreCase) &&
                 vsixPath.EndsWith(".vsix", StringComparison.OrdinalIgnoreCase);
 
+            RaiseChangedProperties(oldText, oldIsCut, oldHasItems);
+
+            if (!string.IsNullOrEmpty(vsixPath) || tooltipContent != null)
+            {
+                object oldTooltip = ToolTipContent;
+                ToolTipContent = tooltipContent ?? SetTooltip(vsixPath);
+
+                if (!Equals(oldTooltip, ToolTipContent))
+                {
+                    RaisePropertyChanged(nameof(ToolTipContent));
+                }
+            }
+        }
+
+        private void ResetLoadingState()
+        {
+            lock (_loadLock)
+            {
+                _isLoaded = false;
+                _loadGeneration++;
+
+                if (_isLoading)
+                {
+                    _reloadRequested = true;
+                    _loadCancellationTokenSource?.Cancel();
+                }
+            }
+        }
+
+        private void RaiseChangedProperties(string oldText, bool oldIsCut, bool oldHasItems)
+        {
             if (!string.Equals(oldText, Text, StringComparison.Ordinal))
             {
                 RaisePropertyChanged(nameof(Text));
@@ -107,17 +158,6 @@ namespace VsixTreeViewer.MEF
             if (oldHasItems != HasItems)
             {
                 RaisePropertyChanged(nameof(HasItems));
-            }
-
-            if (!string.IsNullOrEmpty(vsixPath) || tooltipContent != null)
-            {
-                object oldTooltip = ToolTipContent;
-                ToolTipContent = tooltipContent ?? SetTooltip(vsixPath);
-
-                if (!Equals(oldTooltip, ToolTipContent))
-                {
-                    RaisePropertyChanged(nameof(ToolTipContent));
-                }
             }
         }
 
@@ -249,7 +289,15 @@ namespace VsixTreeViewer.MEF
         {
             var activeNodes = new List<VsixItemNode>();
 
-            if (Info is DirectoryInfo directory)
+            if (_archiveEntry?.IsDirectory == true)
+            {
+                foreach (VsixArchiveEntry entry in _archiveEntry.Children)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    activeNodes.Add(new VsixItemNode(this, entry));
+                }
+            }
+            else if (Info is DirectoryInfo directory)
             {
                 try
                 {
@@ -348,8 +396,8 @@ namespace VsixTreeViewer.MEF
 
             for (int i = 0; i < existingChildren.Count; i++)
             {
-                string existingPath = existingChildren[i].Info?.FullName;
-                string newPath = newChildren[i].Info?.FullName;
+                string existingPath = existingChildren[i].NodePath;
+                string newPath = newChildren[i].NodePath;
 
                 if (!string.Equals(existingPath, newPath, StringComparison.OrdinalIgnoreCase))
                 {
@@ -361,6 +409,7 @@ namespace VsixTreeViewer.MEF
         }
 
         public string Text { get; set; }
+        private string NodePath => _archiveEntry?.FullName ?? Info?.FullName;
         public string ToolTipText => null;
         public string StateToolTipText => null;
         public object ToolTipContent { get; set; }
@@ -368,8 +417,8 @@ namespace VsixTreeViewer.MEF
         public FontWeight FontWeight => FontWeights.Normal;
         public System.Windows.FontStyle FontStyle => FontStyles.Normal;
 
-        public ImageMoniker IconMoniker => _showVsixIcon ? KnownMonikers.Extension : Info.GetIcon(false);
-        public ImageMoniker ExpandedIconMoniker => _showVsixIcon ? KnownMonikers.Extension : Info.GetIcon(true);
+        public ImageMoniker IconMoniker => GetIcon(isOpen: false);
+        public ImageMoniker ExpandedIconMoniker => GetIcon(isOpen: true);
         public ImageMoniker OverlayIconMoniker => default;
         public ImageMoniker StateIconMoniker => default;
 
@@ -387,7 +436,7 @@ namespace VsixTreeViewer.MEF
                 }
             }
         }
-        public bool CanPreview => Info is FileInfo;
+        public bool CanPreview => Info is FileInfo || _archiveEntry?.IsDirectory == false;
 
         public IInvocationController InvocationController => VsixItemInvocationController.Instance;
 
@@ -450,8 +499,8 @@ namespace VsixTreeViewer.MEF
                 return obj is ITreeDisplayItem item ? _stringComparer.Compare(Text, item.Text) : 0;
             }
 
-            var thisIsDirectory = Info is DirectoryInfo;
-            var otherIsDirectory = node.Info is DirectoryInfo;
+            bool thisIsDirectory = IsDirectory;
+            bool otherIsDirectory = node.IsDirectory;
 
             if (thisIsDirectory != otherIsDirectory)
             {
@@ -459,6 +508,33 @@ namespace VsixTreeViewer.MEF
             }
 
             return _stringComparer.Compare(Text, node.Text);
+        }
+
+        internal bool IsDirectory => _archiveEntry?.IsDirectory ?? Info is DirectoryInfo;
+
+        internal string GetOpenPath()
+        {
+            if (_archiveEntry?.IsDirectory == false)
+            {
+                return _archiveEntry.Owner.Materialize(_archiveEntry);
+            }
+
+            return (Info as FileInfo)?.FullName;
+        }
+
+        private ImageMoniker GetIcon(bool isOpen)
+        {
+            if (_showVsixIcon)
+            {
+                return KnownMonikers.Extension;
+            }
+
+            if (_archiveEntry != null)
+            {
+                return IconMapper.GetIcon(_archiveEntry.Name, _archiveEntry.IsDirectory, isOpen);
+            }
+
+            return Info.GetIcon(isOpen);
         }
 
         private string SetTooltip(string vsixFile)
@@ -475,6 +551,16 @@ namespace VsixTreeViewer.MEF
             }
 
             return $"Last updated: {Info.LastWriteTime}";
+        }
+
+        private static string SetArchiveTooltip(VsixArchiveEntry entry)
+        {
+            if (entry.IsDirectory)
+            {
+                return $"{entry.Children.Count:N0} item(s)\r\nPackage path: {entry.FullName}";
+            }
+
+            return $"Size: {entry.Length:N0} bytes\r\nPackage path: {entry.FullName}";
         }
 
         public void Dispose()
