@@ -1,8 +1,5 @@
 # yaml-language-server: $schema=https://www.schemastore.org/github-workflow.json
 name: "Build"
-permissions:
-  actions: write
-  contents: write
 
 on:
   push:
@@ -11,8 +8,14 @@ on:
     branches: [master]
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
+    permissions:
+      contents: read
     outputs:
       version: ${{ steps.vsix_version.outputs.version-number }}
     name: Build
@@ -46,7 +49,7 @@ jobs:
         vsix-token-source-file: ${{ env.VsixManifestSourcePath }}
 
     - name: Restore NuGet packages
-      run: msbuild ${{ env.Solution }} /v:m -restore /t:Restore
+      run: msbuild ${{ env.Solution }} /v:m /t:Restore /p:Configuration=${{ env.Configuration }}
 
     - name: Build
       run: msbuild ${{ env.Solution }} /v:m /m /p:Configuration=${{ env.Configuration }} /p:DeployExtension=${{ env.DeployExtension }}
@@ -56,11 +59,14 @@ jobs:
       with:
         name: ${{ github.event.repository.name }}.vsix
         path: src\bin\${{ env.Configuration }}\net48\VsixTreeViewer.vsix
+        if-no-files-found: error
 
   publish:
     if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
     needs: build
     runs-on: windows-latest
+    permissions:
+      contents: write
 
     steps:
       - uses: actions/checkout@v6
