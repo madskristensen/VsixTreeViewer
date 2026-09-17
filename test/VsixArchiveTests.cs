@@ -57,6 +57,39 @@ public sealed class VsixArchiveTests
         }
     }
 
+    [TestMethod]
+    public void FindsManifestAndExtractsPackage()
+    {
+        string testDirectory = Path.Combine(Path.GetTempPath(), nameof(VsixArchiveTests), Guid.NewGuid().ToString("N"));
+        string archivePath = Path.Combine(testDirectory, "sample.vsix");
+        string extractionPath = Path.Combine(testDirectory, "extracted");
+        Directory.CreateDirectory(testDirectory);
+
+        try
+        {
+            using (ZipArchive zip = ZipFile.Open(archivePath, ZipArchiveMode.Create))
+            {
+                WriteEntry(zip, "extension.vsixmanifest", "<PackageManifest />");
+                WriteEntry(zip, "folder/content.txt", "content");
+            }
+
+            VsixArchive archive = VsixArchive.Load(archivePath);
+            VsixArchiveEntry manifest = archive.FindManifestEntry();
+            archive.ExtractToDirectory(extractionPath);
+
+            Assert.IsNotNull(manifest);
+            Assert.AreEqual("extension.vsixmanifest", manifest.FullName);
+            Assert.AreEqual("content", File.ReadAllText(Path.Combine(extractionPath, "folder", "content.txt")));
+        }
+        finally
+        {
+            if (Directory.Exists(testDirectory))
+            {
+                Directory.Delete(testDirectory, recursive: true);
+            }
+        }
+    }
+
     private static void WriteEntry(ZipArchive archive, string path, string content)
     {
         ZipArchiveEntry entry = archive.CreateEntry(path);

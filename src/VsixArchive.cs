@@ -22,6 +22,11 @@ namespace VsixTreeViewer
         public VsixArchiveEntry Root { get; }
         public string ManifestContent { get; }
 
+        public VsixArchiveEntry FindManifestEntry()
+        {
+            return FindEntry(Root, entry => !entry.IsDirectory && entry.Name.EndsWith(".vsixmanifest", StringComparison.OrdinalIgnoreCase));
+        }
+
         public static VsixArchive Load(string snapshotPath)
         {
             var root = new MutableEntry(string.Empty, string.Empty, isDirectory: true, length: 0, DateTimeOffset.MinValue);
@@ -95,6 +100,61 @@ namespace VsixTreeViewer
             zipEntry.ExtractToFile(targetPath, overwrite: true);
             VsixTemporaryFiles.TouchMaterializedRoot(rootDirectory);
             return targetPath;
+        }
+
+        public void ExtractToDirectory(string targetDirectory)
+        {
+            foreach (VsixArchiveEntry entry in EnumerateFiles(Root))
+            {
+                string sourcePath = Materialize(entry);
+                string targetPath = Path.GetFullPath(Path.Combine(targetDirectory, entry.FullName.Replace('/', Path.DirectorySeparatorChar)));
+                string normalizedTarget = Path.GetFullPath(targetDirectory).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+
+                if (!targetPath.StartsWith(normalizedTarget, StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new InvalidDataException($"The VSIX entry path '{entry.FullName}' is invalid.");
+                }
+
+                Directory.CreateDirectory(Path.GetDirectoryName(targetPath));
+                File.Copy(sourcePath, targetPath, overwrite: true);
+            }
+        }
+
+        private static VsixArchiveEntry FindEntry(VsixArchiveEntry parent, Func<VsixArchiveEntry, bool> predicate)
+        {
+            foreach (VsixArchiveEntry child in parent.Children)
+            {
+                if (predicate(child))
+                {
+                    return child;
+                }
+
+                VsixArchiveEntry match = FindEntry(child, predicate);
+                if (match != null)
+                {
+                    return match;
+                }
+            }
+
+            return null;
+        }
+
+        private static IEnumerable<VsixArchiveEntry> EnumerateFiles(VsixArchiveEntry parent)
+        {
+            foreach (VsixArchiveEntry child in parent.Children)
+            {
+                if (child.IsDirectory)
+                {
+                    foreach (VsixArchiveEntry descendant in EnumerateFiles(child))
+                    {
+                        yield return descendant;
+                    }
+                }
+                else
+                {
+                    yield return child;
+                }
+            }
         }
 
         private static string[] GetSafeSegments(string entryPath)

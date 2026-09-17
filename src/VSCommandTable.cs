@@ -25,5 +25,20 @@ namespace VsixTreeViewer
     /// </summary>
     internal sealed partial class PackageIds
     {
+        public const int VsixRootContextMenu = 0x1000;
+        public const int VsixFolderContextMenu = 0x1001;
+        public const int VsixFileContextMenu = 0x1002;
+        public const int RootPackageGroup = 0x1100;
+        public const int RootBuildGroup = 0x1101;
+        public const int FolderActionsGroup = 0x1200;
+        public const int FileActionsGroup = 0x1300;
+        public const int OpenInFileExplorer = 0x0100;
+        public const int OpenContainingFolder = 0x0101;
+        public const int CopyPath = 0x0102;
+        public const int CopyFile = 0x0103;
+        public const int ExtractVsix = 0x0104;
+        public const int OpenManifest = 0x0105;
+        public const int RebuildVsixProject = 0x0106;
+        public const int RefreshVsix = 0x0107;
     }
 }

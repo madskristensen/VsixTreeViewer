@@ -28,6 +28,7 @@ namespace VsixTreeViewer
         private FileSystemWatcher _vsixWatcher;
         private string _watchedDirectory;
         private string _snapshotPath;
+        private string _vsixPath;
         private volatile bool _isBuilding;
         private volatile bool _isDisposed;
 
@@ -160,12 +161,14 @@ namespace VsixTreeViewer
                         string tooltip = BuildTooltip(vsixPath, archive?.ManifestContent);
 
                         SetActiveSnapshot(snapshotPath);
+                        _vsixPath = vsixPath;
                         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
                         _item.Rebuild(archive, vsixPath, tooltip);
                         return;
                     }
 
                     await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+                    _vsixPath = null;
                     _item.Rebuild(_defaultName, "root", BuildMissingVsixTooltip(outputDirectory));
                 }
                 catch (InvalidDataException ex)
@@ -192,6 +195,7 @@ namespace VsixTreeViewer
         {
             exception?.Log();
             SetActiveSnapshot(snapshotPath: null);
+            _vsixPath = null;
             await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
 
             if (!_isDisposed)
@@ -536,6 +540,28 @@ namespace VsixTreeViewer
         public object SourceItem => this;
         public bool HasItems => _item != null;
         public IEnumerable Items => _items;
+        internal string VsixPath => _vsixPath;
+
+        internal void Refresh()
+        {
+            ScheduleRebuild(force: true);
+        }
+
+        internal void RebuildProject()
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+
+            EnvDTE.Project project = _project ?? FindProjectRecursive(_dte.Solution.Projects);
+            if (project == null)
+            {
+                throw new InvalidOperationException("The VSIX project is no longer available.");
+            }
+
+            _dte.Solution.SolutionBuild.BuildProject(
+                _dte.Solution.SolutionBuild.ActiveConfiguration.Name,
+                project.UniqueName,
+                WaitForBuildToFinish: false);
+        }
 
         private static string CreateVsixSnapshot(string vsixPath)
         {

@@ -21,7 +21,7 @@ namespace VsixTreeViewer.MEF
         IPrioritizedComparable,
         IBrowsablePattern,
         IInteractionPatternProvider,
-        //IContextMenuPattern,
+        IContextMenuPattern,
         IInvocationPattern,
         ISupportDisposalNotification,
         IDisposable,
@@ -465,6 +465,25 @@ namespace VsixTreeViewer.MEF
         public bool CanPreview => Info is FileInfo || _archiveEntry?.IsDirectory == false;
 
         public IInvocationController InvocationController => VsixItemInvocationController.Instance;
+        public IContextMenuController ContextMenuController => VsixContextMenuController.Instance;
+
+        internal bool IsArchiveRoot => _archiveEntry != null && string.IsNullOrEmpty(_archiveEntry.FullName);
+        internal string PackagePath => IsArchiveRoot ? RootNode?.VsixPath : _archiveEntry?.FullName;
+        internal VsixArchive Archive => _archiveEntry?.Owner;
+        internal VsixRootNode RootNode
+        {
+            get
+            {
+                object source = SourceItem;
+
+                while (source is VsixItemNode node)
+                {
+                    source = node.SourceItem;
+                }
+
+                return source as VsixRootNode;
+            }
+        }
 
         public event PropertyChangedEventHandler PropertyChanged;
 
@@ -638,6 +657,7 @@ namespace VsixTreeViewer.MEF
                 if (patternType == typeof(ITreeDisplayItem) ||
                     patternType == typeof(IBrowsablePattern) ||
                     patternType == typeof(IInvocationPattern) ||
+                    patternType == typeof(IContextMenuPattern) ||
                     patternType == typeof(ISupportDisposalNotification) ||
                     patternType == typeof(IRefreshPattern))
                 {
