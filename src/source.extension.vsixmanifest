@@ -2,13 +2,13 @@
 <PackageManifest Version="2.0.0" xmlns="http://schemas.microsoft.com/developer/vsx-schema/2011" xmlns:d="http://schemas.microsoft.com/developer/vsx-schema-design/2011">
   <Metadata>
     <Identity Id="VsixTreeViewer.8bc7b2af-9ddc-4b5d-9983-6a980b3d0243" Version="1.0" Language="en-US" Publisher="Mads Kristensen" />
-    <DisplayName>VSIX Node</DisplayName>
-    <Description xml:space="preserve">Shows the content of the compiled .vsix file directly in Solution Explorer</Description>
-    <MoreInfo>https://github.com/madskristensen/VsxTreeViewer</MoreInfo>
+    <DisplayName>VSIX Tree Viewer</DisplayName>
+    <Description xml:space="preserve">Browse, inspect, and compare generated VSIX package contents directly in Solution Explorer</Description>
+    <MoreInfo>https://github.com/madskristensen/VsixTreeViewer</MoreInfo>
     <License>Resources\LICENSE.txt</License>
     <Icon>Resources\Icon.png</Icon>
     <PreviewImage>Resources\Icon.png</PreviewImage>
-    <Tags>vsix, vssdk, extension</Tags>
+    <Tags>vsix, vssdk, extension, solution explorer, package viewer</Tags>
   </Metadata>
   <Installation>
     <InstallationTarget Id="Microsoft.VisualStudio.Community" Version="[17.6, 19.0)">

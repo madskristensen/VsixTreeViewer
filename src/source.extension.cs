@@ -9,12 +9,12 @@ namespace VsixTreeViewer
     internal sealed partial class Vsix
     {
         public const string Id = "VsixTreeViewer.8bc7b2af-9ddc-4b5d-9983-6a980b3d0243";
-        public const string Name = "VSIX Node";
-        public const string Description = @"Shows the content of the compiled .vsix file directly in Solution Explorer";
+        public const string Name = "VSIX Tree Viewer";
+        public const string Description = @"Browse, inspect, and compare generated VSIX package contents directly in Solution Explorer";
         public const string Language = "en-US";
         public const string Version = "1.0";
         public const string Author = "Mads Kristensen";
-        public const string Tags = "vsix, vssdk, extension";
+        public const string Tags = "vsix, vssdk, extension, solution explorer, package viewer";
         public const bool IsPreview = false;
     }
 }
